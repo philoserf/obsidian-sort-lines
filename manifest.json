@@ -1,10 +1,10 @@
 {
-  "id": "obsidian-sort-and-permute-lines",
-  "name": "Sort & Permute lines",
-  "version": "0.7.0",
-  "description": "",
-  "author": "Vinzent",
-  "authorUrl": "https://github.com/Vinzent03",
-  "fundingUrl": "https://ko-fi.com/vinzent",
-  "isDesktopOnly": false
+  "id": "sort-lines",
+  "name": "Sort Lines",
+  "description": "Sort and permute lines, lists, and headings",
+  "version": "1.0.0",
+  "author": "Mark Ayers (originally by Vinzent)",
+  "authorUrl": "https://github.com/philoserf",
+  "isDesktopOnly": false,
+  "minAppVersion": "1.0.0"
 }

@@ -1,24 +1,23 @@
 {
-  "name": "my-plugin",
-  "version": "0.9.7",
-  "description": "This is a sample plugin for Obsidian (https://obsidian.md)",
-  "main": "main.js",
-  "scripts": {
-    "dev": "rollup --config rollup.config.js -w",
-    "build": "rollup --config rollup.config.js"
-  },
-  "keywords": [],
-  "author": "",
+  "name": "sort-lines",
+  "version": "1.0.0",
+  "description": "Sort and permute lines, lists, and headings in Obsidian",
   "license": "MIT",
-  "devDependencies": {
-    "@rollup/plugin-commonjs": "^15.1.0",
-    "@rollup/plugin-node-resolve": "^9.0.0",
-    "@rollup/plugin-typescript": "^6.0.0",
-    "@types/node": "^14.14.2",
-    "obsidian": "^0.16.3",
-    "rollup": "^2.32.1",
-    "tslib": "^2.0.3",
-    "typescript": "4.0.3"
+  "type": "module",
+  "scripts": {
+    "dev": "bun build src/main.ts --outfile dist/main.js --format cjs --external obsidian --watch",
+    "build": "bun run check && bun build src/main.ts --outfile dist/main.js --format cjs --external obsidian",
+    "check": "biome check src/",
+    "lint": "biome check src/",
+    "lint:fix": "biome check --write src/",
+    "format": "biome format --write src/",
+    "format:check": "biome format src/",
+    "version": "bun run version-bump.ts"
   },
-  "dependencies": {}
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.3",
+    "@types/node": "^25.3.0",
+    "obsidian": "^1.12.2",
+    "typescript": "^5.9.3"
+  }
 }
