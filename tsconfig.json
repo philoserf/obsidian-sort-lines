@@ -1,8 +1,8 @@
 {
   "include": ["src/**/*", "version-bump.ts"],
   "compilerOptions": {
-    "target": "ES2022",
-    "lib": ["ES2022", "DOM"],
+    "target": "ESNext",
+    "lib": ["DOM", "ESNext"],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "noEmit": true,
