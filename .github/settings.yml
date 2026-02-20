@@ -1,0 +1,8 @@
+_extends: .github
+
+repository:
+  name: obsidian-sort-lines
+  description: "Sort and permute lines, lists, and headings in Obsidian"
+  homepage: https://philoserf.github.io/obsidian-sort-lines/
+  topics:
+    - obsidian-plugin
