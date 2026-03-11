@@ -34,12 +34,12 @@ find . -not -path "./.git/*" -not -path "./node_modules/*" -not -path "./.bun/*"
 ./.github/workflows/main.yml
 ./.github/workflows/release.yml
 ./.gitignore
-./AGENTS.md
 ./assets
 ./assets/example.gif
 ./biome.json
 ./build.ts
 ./bun.lock
+./CHANGELOG.md
 ./CLAUDE.md
 ./LICENSE
 ./main.js
@@ -879,7 +879,9 @@ jobs:
           bun-version: latest
 
       - run: bun install
+      - run: bun audit --audit-level=critical
       - run: bun run check
+      - run: bun test
 ```
 
 ### Release Workflow
@@ -895,6 +897,9 @@ on:
   push:
     tags:
       - "*"
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -986,4 +991,3 @@ The plugin is well-structured and focused. The 4-phase pipeline is clean, the
 `source`/`formatted` separation is a good design choice, and the locale-aware collator
 handles international content correctly. The high-severity items are correctness bugs;
 the medium items are maintainability and robustness improvements.
-
