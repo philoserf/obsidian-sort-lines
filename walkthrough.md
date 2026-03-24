@@ -1,87 +1,72 @@
-# Sort Lines Plugin — Code Walkthrough
+# Sort Lines Plugin Walkthrough
 
-*2026-03-09T04:20:28Z by Showboat 0.6.1*
-<!-- showboat-id: f68d128b-b40e-4fca-96a1-d0ae9da69843 -->
+*2026-03-24T19:38:21Z by Showboat 0.6.1*
+<!-- showboat-id: c327a160-846c-4ab6-8267-d9d76601b0b0 -->
 
 ## Overview
 
-**Sort Lines** is an Obsidian plugin that provides 11 commands for sorting and permuting
-text within markdown notes. The entire implementation lives in a single file (`src/main.ts`,
-412 lines) with unit tests alongside it in `src/main.test.ts`.
+**Sort Lines** is an Obsidian plugin that sorts and permutes lines, lists, and headings
+in the active editor. It registers 11 commands via the Obsidian command palette and
+operates entirely on the editor buffer — no file I/O, no settings, no persistence.
 
-The plugin follows a consistent 4-phase pipeline for every operation:
+Key technologies: TypeScript, Bun (runtime, bundler, test runner), Biome (lint/format),
+Obsidian Plugin API.
 
-1. **Context** — Determine scope (selection, current list, or full document)
-2. **Parse** — Extract lines with metadata (headings, checkboxes, links)
-3. **Transform** — Sort or permute the lines
-4. **Write** — Replace editor content with the result
+**Entry point:** `src/main.ts` — a single-file plugin that exports a `Plugin` subclass.
 
-Let's trace this pipeline from initialization through each algorithm.
+**Build output:** `main.js` (CJS, minified ~7 KB) consumed by Obsidian at runtime.
 
-## Project Structure
+## Architecture
+
+The project is a single-module plugin with supporting build tooling.
 
 ```bash
-find . -not -path "./.git/*" -not -path "./node_modules/*" -not -path "./.bun/*" -not -path "./.claude/*" -not -path "./planning/*" | sort
+cat <<'HEREDOC'
+.
+├── src/
+│   ├── main.ts            # Plugin class — all logic lives here
+│   └── main.test.ts       # Unit tests (Bun test runner)
+├── scripts/
+│   └── validate-plugin.ts # Pre-release validation script
+├── build.ts               # Bun bundler config
+├── version-bump.ts        # Syncs version to manifest + versions.json
+├── biome.json             # Formatter/linter config
+├── tsconfig.json          # TypeScript config (strict, noEmit)
+├── manifest.json          # Obsidian plugin manifest
+├── versions.json          # Obsidian version compatibility map
+├── package.json           # Dependencies and scripts
+└── .github/workflows/
+    ├── main.yml           # CI: audit, check, test on push/PR
+    └── release.yml        # Release: validate, build, publish on tag
+HEREDOC
 ```
 
 ```output
 .
-./.git
-./.github
-./.github/dependabot.yml
-./.github/settings.yml
-./.github/workflows
-./.github/workflows/main.yml
-./.github/workflows/release.yml
-./.gitignore
-./assets
-./assets/example.gif
-./biome.json
-./build.ts
-./bun.lock
-./CHANGELOG.md
-./CLAUDE.md
-./LICENSE
-./main.js
-./manifest.json
-./node_modules
-./package.json
-./README.md
-./scripts
-./scripts/validate-plugin.ts
-./src
-./src/main.test.ts
-./src/main.ts
-./tsconfig.json
-./version-bump.ts
-./versions.json
-./walkthrough.md
+├── src/
+│   ├── main.ts            # Plugin class — all logic lives here
+│   └── main.test.ts       # Unit tests (Bun test runner)
+├── scripts/
+│   └── validate-plugin.ts # Pre-release validation script
+├── build.ts               # Bun bundler config
+├── version-bump.ts        # Syncs version to manifest + versions.json
+├── biome.json             # Formatter/linter config
+├── tsconfig.json          # TypeScript config (strict, noEmit)
+├── manifest.json          # Obsidian plugin manifest
+├── versions.json          # Obsidian version compatibility map
+├── package.json           # Dependencies and scripts
+└── .github/workflows/
+    ├── main.yml           # CI: audit, check, test on push/PR
+    └── release.yml        # Release: validate, build, publish on tag
 ```
 
-Key files:
+## Core Data Structures
 
-- `src/main.ts` — Complete plugin implementation (412 lines)
-- `src/main.test.ts` — Unit tests (232 lines)
-- `build.ts` — Bun bundler config → outputs `main.js` (CommonJS, minified)
-- `manifest.json` — Obsidian plugin metadata
-- `scripts/validate-plugin.ts` — Pre-release validation checks
-
-The build externalizes `obsidian` and `electron` (provided by Obsidian at runtime) and
-produces a single `main.js` in CommonJS format — Obsidian's required module format.
-
-## Data Types
-
-The plugin defines four interfaces that model its domain. Let's look at each.
-
-### Line
-
-The fundamental unit. Every line in the editor becomes a `Line` object with both its
-original text (`source`, preserved for writing back) and a normalized form (`formatted`,
-used for comparison). This separation is the key insight — sort on the clean form, write
-back the original.
+The plugin defines four interfaces that model the editor content. These are local
+to `main.ts` — nothing is exported except the plugin class itself.
 
 ```bash
-sed -n '4,10p' src/main.ts
+sed -n '4,31p' src/main.ts
 ```
 
 ```output
@@ -92,54 +77,20 @@ interface Line {
   lineNumber: number;
   checked: boolean;
 }
-```
 
-### HeadingPart
-
-A recursive tree for heading hierarchy. Each heading owns its content lines and child
-headings. The `to` field tracks the last line index so the parent knows where this
-section ends.
-
-```bash
-sed -n '12,17p' src/main.ts
-```
-
-```output
 interface HeadingPart {
   to: number;
   title: Line;
   lines: Line[];
   headings: HeadingPart[];
 }
-```
 
-### ListPart
-
-Similar recursive tree for list items. Each item has children (nested sub-items) and
-tracks `lastLine` so the iteration knows where to resume after processing a subtree.
-
-```bash
-sed -n '19,23p' src/main.ts
-```
-
-```output
 interface ListPart {
   children: ListPart[];
   title: Line;
   lastLine: number;
 }
-```
 
-### EditorContext
-
-Encapsulates everything needed for one operation: the active view, Obsidian's metadata
-cache, and the line range to operate on.
-
-```bash
-sed -n '25,31p' src/main.ts
-```
-
-```output
 interface EditorContext {
   view: MarkdownView;
   cache: CachedMetadata;
@@ -149,35 +100,45 @@ interface EditorContext {
 }
 ```
 
-### Checkbox Detection
+- **Line** — Wraps a single editor line. `source` is the raw text; `formatted` has
+  wiki-links and checkboxes stripped for sort comparison. `headingLevel` is set only
+  for heading lines.
+- **HeadingPart** — Recursive tree node for heading sort. Each heading owns content
+  lines and child headings.
+- **ListPart** — Recursive tree node for list sort. Each list item owns its children.
+- **EditorContext** — Captures the active view, metadata cache, and the line range
+  to operate on (either the selection or the full document minus frontmatter).
 
-A single regex handles checkbox detection throughout the plugin. It matches any
-`- [x]` pattern where `x` is any non-space character — so `[x]`, `[X]`, `[/]`, `[-]`
-all count as "checked."
+## Checkbox Regex
+
+The plugin recognizes Obsidian's alternative checkbox statuses beyond just `[x]`.
 
 ```bash
-sed -n '33p' src/main.ts
+sed -n '33,35p' src/main.ts
 ```
 
 ```output
+// Matches any non-empty checkbox: [x], [X], [-], [?], [/], [!], etc.
+// Intentionally broad to support Obsidian's alternative checkbox statuses.
 const CHECKBOX_REGEX = /^(\s*)- \[[^ ]\]/i;
 ```
 
-> **Concern (issue #17):** The `[^ ]` character class is deliberately broad — it treats
-> alternative checkbox statuses (`[-]`, `[?]`, `[/]`) as "checked." This works for
-> Obsidian's extended checkbox ecosystem but may surprise users who expect only `[x]`/`[X]`
-> to count. The behavior is undocumented.
+The regex matches `- [x]`, `- [-]`, `- [?]`, `- [/]`, etc. but rejects `- [ ]`
+(unchecked). The capture group `(\s*)` preserves leading indentation for the
+`formatted` field after checkbox stripping.
 
 ## Plugin Initialization
 
-`onload()` does two things: creates a locale-aware string comparator and registers all
-11 commands. The comparator is the foundation of every sort operation.
+`onload()` configures the locale-aware collator and registers all 11 commands.
 
 ```bash
-sed -n '38,46p' src/main.ts
+sed -n '37,48p' src/main.ts
 ```
 
 ```output
+export default class SortLinesPlugin extends Plugin {
+  private compare!: (x: string, y: string) => number;
+
   override onload() {
     const { compare } = new Intl.Collator(navigator.language, {
       usage: "sort",
@@ -189,68 +150,38 @@ sed -n '38,46p' src/main.ts
 
 ```
 
-The `Intl.Collator` settings mean:
+The collator uses `navigator.language` for locale-aware sorting, with `numeric: true`
+so "item 2" sorts before "item 10", and `sensitivity: "base"` for case-insensitive
+comparison.
 
-- **`sensitivity: "base"`** — case-insensitive, accent-insensitive ("a" = "A" = "á")
-- **`numeric: true`** — "item 2" sorts before "item 10" (not lexicographic)
-- **`ignorePunctuation: true`** — leading dashes, bullets, etc. don't affect order
-- **`navigator.language`** — uses the user's locale, so sort order adapts internationally
-
-### Command Registration
-
-The plugin registers 11 commands, each a thin wrapper around one of five core methods.
-Here's the full command table:
+The 11 registered commands and their dispatch targets:
 
 ```bash
-grep -n 'id:' src/main.ts
+grep -n 'id:' src/main.ts | sed 's/^/  /'
 ```
 
 ```output
-48:      id: "sort-alphabetically-with-checkboxes",
-53:      id: "sort-list-alphabetically-with-checkboxes",
-58:      id: "sort-alphabetically",
-63:      id: "sort-list-alphabetically",
-68:      id: "sort-checkboxes",
-78:      id: "sort-length",
-83:      id: "sort-headings",
-88:      id: "permute-reverse",
-93:      id: "permute-shuffle",
-105:      id: "sort-list-recursively",
-110:      id: "sort-list-recursively-with-checkboxes",
+  50:      id: "sort-alphabetically-with-checkboxes",
+  55:      id: "sort-list-alphabetically-with-checkboxes",
+  60:      id: "sort-alphabetically",
+  65:      id: "sort-list-alphabetically",
+  70:      id: "sort-checkboxes",
+  80:      id: "sort-length",
+  85:      id: "sort-headings",
+  90:      id: "permute-reverse",
+  95:      id: "permute-shuffle",
+  107:      id: "sort-list-recursively",
+  112:      id: "sort-list-recursively-with-checkboxes",
 ```
 
-The commands map to five core methods:
+## Editor Context Resolution
 
-| Method | Commands | Scope |
-|---|---|---|
-| `sortAlphabetically()` | 4 commands | selection/doc or current list, ± checkboxes |
-| `sortListRecursively()` | 3 commands | current list (checkbox, alphabetical, both) |
-| `sortHeadings()` | 1 command | full document |
-| `sortLengthOfLine()` | 1 command | selection/document |
-| `permuteReverse()` / `permuteShuffle()` | 2 commands | selection/document |
-
-Two helper comparators are defined inline for the recursive list commands:
+Every command starts by calling `getEditorContext()`, which determines the line
+range to operate on. This is the routing logic that decides whether to sort the
+selection, the current list, or the full document.
 
 ```bash
-sed -n '98,103p' src/main.ts
-```
-
-```output
-    const alphabetical = (a: ListPart, b: ListPart) =>
-      this.compare(a.title.formatted.trim(), b.title.formatted.trim());
-    const alphabeticalWithCheckboxes = (a: ListPart, b: ListPart) => {
-      if (a.title.checked !== b.title.checked) return a.title.checked ? 1 : -1;
-      return this.compare(a.title.formatted.trim(), b.title.formatted.trim());
-    };
-```
-
-## Phase 1: Editor Context Resolution
-
-Every command starts by calling `getEditorContext()` to determine *what text to operate on*.
-This is the most complex piece of the pipeline because it handles three different scopes.
-
-```bash
-sed -n '311,360p' src/main.ts
+sed -n '360,409p' src/main.ts
 ```
 
 ```output
@@ -270,6 +201,7 @@ sed -n '311,360p' src/main.ts
     if (fromCurrentList) {
       const list = cache.sections?.find(
         (e) =>
+          e.type === "list" &&
           e.position.start.line <= cursorStart &&
           e.position.end.line >= cursorEnd,
       );
@@ -280,8 +212,7 @@ sed -n '311,360p' src/main.ts
     }
 
     const cursorEndLineLength = editor.getLine(cursorEnd).length;
-    let frontStart = (cache.frontmatter?.position?.end?.line ?? -1) + 1;
-    if (Number.isNaN(frontStart)) frontStart = 0;
+    const frontStart = (cache.frontmatter?.position?.end?.line ?? -1) + 1;
 
     const frontEnd = editor.lastLine();
     const frontEndLineLength = editor.getLine(frontEnd).length;
@@ -306,32 +237,24 @@ sed -n '311,360p' src/main.ts
   }
 ```
 
-### How scope resolution works
+Resolution logic:
 
-1. **Get the active markdown view** — early return if none (silent, no user notice)
-2. **Get Obsidian's metadata cache** — parsed headings, links, sections, etc.
-3. **Read cursor/selection range** — `getCursor("from")` and `getCursor("to")`
-4. **If `fromCurrentList`** — find the `cache.sections` entry containing the cursor
-5. **Calculate frontmatter boundary** — everything after `---` closing fence
-6. **Decision:**
-   - If `cursorStart !== cursorEnd` (there's a selection or list range) → use that range
-   - Otherwise → use the full document (after frontmatter)
+1. Get the active markdown view and its metadata cache.
+2. If `fromCurrentList` is true, find the list section containing the cursor
+   using Obsidian's cached section metadata (filtered to `type === "list"`).
+3. If a multi-line selection exists (`cursorStart !== cursorEnd`), operate on the selection.
+4. Otherwise, operate on the entire document from after frontmatter to the last line.
 
-> **Concern (issue #7):** The `fromCurrentList` path at line 325 searches `cache.sections`
-> for *any* section containing the cursor — not just sections with `type === "list"`. A
-> heading section, paragraph, or code block would also match. This means "Sort current list"
-> commands can operate on non-list content.
+The frontmatter boundary is `(cache.frontmatter.position.end.line ?? -1) + 1`,
+which evaluates to 0 when there is no frontmatter.
 
-> **Concern (issue #15):** All error paths are silent early returns. If there's no active
-> editor or no cache, the user gets zero feedback — the command just does nothing.
+## Line Extraction and Link Replacement
 
-## Phase 2: Line Parsing
-
-`getLines()` transforms raw editor text into `Line[]` objects enriched with metadata from
-Obsidian's cache.
+`getLines()` converts the editor buffer into `Line[]`, stripping wiki-links and
+checkboxes from the `formatted` field so sorts compare visible text only.
 
 ```bash
-sed -n '362,396p' src/main.ts
+sed -n '411,447p' src/main.ts
 ```
 
 ```output
@@ -348,12 +271,14 @@ sed -n '362,396p' src/main.ts
         checked: CHECKBOX_REGEX.test(line),
       };
 
-      for (const link of links) {
-        if (link.position.start.line !== index) continue;
-        result.formatted = result.formatted.replace(
-          line.substring(link.position.start.col, link.position.end.col),
-          link.displayText ?? "",
-        );
+      const lineLinks = links
+        .filter((link) => link.position.start.line === index)
+        .sort((a, b) => b.position.start.col - a.position.start.col);
+      for (const link of lineLinks) {
+        result.formatted =
+          result.formatted.substring(0, link.position.start.col) +
+          (link.displayText ?? "") +
+          result.formatted.substring(link.position.end.col);
       }
 
       result.formatted = result.formatted.replace(CHECKBOX_REGEX, "$1");
@@ -372,43 +297,36 @@ sed -n '362,396p' src/main.ts
   }
 ```
 
-### What `getLines()` does
+Key details of link replacement:
 
-1. **Splits the full document** on `\n` — gets all lines, not just the selected range
-2. **Merges links and embeds** from cache into one array
-3. **For each line:**
-   - Sets `source` (original) and `formatted` (mutable copy)
-   - Tests checkbox regex → sets `checked` boolean
-   - **Replaces link/embed syntax** with display text in `formatted`. For example,
-     `[[My Long Note|short]]` becomes `short` for sorting purposes
-   - **Strips checkbox markers** from `formatted` using the capture group `$1` (preserving
-     indentation)
-4. **Maps heading levels** from cache onto the corresponding lines
-5. **Slices to the requested range** if a selection/list scope exists
+- Links are sorted **right-to-left** by column position (`b.position.start.col - a.position.start.col`)
+  so that splicing one link doesn't shift the column offsets of links to its left.
+- Each `[[wiki-link|display]]` is replaced by its `displayText` (or empty string if none).
+- After link replacement, checkboxes are stripped: `- [x] task` becomes `task` with
+  only the leading whitespace preserved.
+- Heading levels are applied from the metadata cache after all lines are mapped.
 
-> **Concern (issue #5):** The link replacement at line 377 uses `String.replace()` with
-> the link's raw text as the search string. `.replace()` matches the *first occurrence*
-> of that substring, not the positional column. If a line contains the same link text
-> twice, the wrong occurrence could be replaced. A column-based `substring` splice would
-> be correct.
+## Alphabetical Sort
 
-## Phase 3: Sorting Algorithms
-
-### Alphabetical Sort
-
-The simplest sort — flat comparison of `formatted` text with the locale-aware collator.
-The `ignoreCheckboxes` flag toggles whether unchecked items float to the top.
+The simplest sort operation. With `ignoreCheckboxes: true`, it sorts purely by
+formatted text. With `false`, checked items sink to the bottom.
 
 ```bash
-sed -n '116,134p' src/main.ts
+sed -n '118,142p' src/main.ts
 ```
 
 ```output
   private sortAlphabetically(fromCurrentList = false, ignoreCheckboxes = true) {
     const ctx = this.getEditorContext(fromCurrentList);
-    if (!ctx) return;
+    if (!ctx) {
+      new Notice("Sort Lines: no active editor");
+      return;
+    }
     const lines = this.getLines(ctx);
-    if (lines.length === 0) return;
+    if (lines.length === 0) {
+      new Notice("Sort Lines: no lines to sort");
+      return;
+    }
 
     if (ignoreCheckboxes) {
       lines.sort((a, b) =>
@@ -425,83 +343,17 @@ sed -n '116,134p' src/main.ts
   }
 ```
 
-When `ignoreCheckboxes` is false, the comparator implements a two-tier sort:
-1. **Checkbox state** — unchecked (`checked: false`) sorts before checked (`checked: true`)
-2. **Alphabetical** — within the same state, locale-aware comparison
+All sort commands follow the same pattern: get context → get lines → guard empty →
+sort → set lines. The `setLines` method writes back using `source` (the original
+text), preserving links and formatting that were stripped only for comparison.
 
-This is the 4-phase pipeline in its purest form: context → parse → sort → write.
+## Recursive List Sort
 
-### Recursive List Sort
-
-This is the most complex algorithm. It preserves parent-child relationships in nested
-lists while sorting siblings at each level.
+List-aware sorting preserves parent-child nesting. It builds a tree from Obsidian's
+`ListItemCache` metadata, sorts siblings at each level, then flattens back to lines.
 
 ```bash
-sed -n '136,177p' src/main.ts
-```
-
-```output
-  private sortListRecursively(compareFn: (a: ListPart, b: ListPart) => number) {
-    const ctx = this.getEditorContext(true);
-    if (!ctx) return;
-    const inputLines = this.getLines(ctx);
-    if (
-      inputLines.length === 0 ||
-      inputLines.find((line) => line.source.trim() === "")
-    )
-      return;
-
-    const firstLineNumber = inputLines.first()?.lineNumber;
-    if (firstLineNumber == null) return;
-    const lines = [
-      ...new Array(firstLineNumber).fill(undefined),
-      ...inputLines,
-    ];
-    let index = firstLineNumber;
-
-    if (!ctx.cache.listItems) return;
-    const cacheMap = new Map(
-      ctx.cache.listItems.map((item) => [item.position.start.line, item]),
-    );
-
-    const children: ListPart[] = [];
-    while (index < lines.length) {
-      const newChild = this.getSortedListParts(
-        lines,
-        cacheMap,
-        index,
-        compareFn,
-      );
-      children.push(newChild);
-      index = newChild.lastLine + 1;
-    }
-    children.sort(compareFn);
-
-    const res = children.reduce<Line[]>(
-      (acc, cur) => acc.concat(this.listPartToList(cur)),
-      [],
-    );
-    this.setLines(ctx, res);
-  }
-```
-
-### How recursive list sort works
-
-1. **Guard:** Aborts silently if blank lines exist (indicates inconsistent metadata)
-2. **Padding:** Creates a sparse array with `undefined` entries for lines before the list
-   start, so that array indices match line numbers (Obsidian's cache uses absolute line
-   numbers)
-3. **Cache map:** Builds a `Map<lineNumber, ListItemCache>` for O(1) lookup of each
-   line's parent pointer and depth
-4. **Top-level iteration:** Walks through lines, calling `getSortedListParts()` for each
-   top-level item to build its subtree
-5. **Sort top-level children** with the provided comparator
-6. **Flatten** the tree back to a linear array via `listPartToList()`
-
-The recursive descent happens in `getSortedListParts()`:
-
-```bash
-sed -n '179,210p' src/main.ts
+sed -n '196,239p' src/main.ts
 ```
 
 ```output
@@ -517,6 +369,11 @@ sed -n '179,210p' src/main.ts
       return { children: [], title: lines[index], lastLine: index };
     const title = lines[index];
 
+    // Obsidian's ListItemCache.parent is the line number of the parent item,
+    // or a negative value for top-level items (no parent).
+    // This loop collects children: the next line is a child if:
+    //   1. Its parent pointer is deeper than ours (nested under us), OR
+    //   2. We're top-level (parent < 0) and the next item has any parent (is nested)
     while (
       startListCache.parent < (cacheMap.get(index + 1)?.parent ?? -1) ||
       (startListCache.parent < 0 &&
@@ -533,37 +390,11 @@ sed -n '179,210p' src/main.ts
       children.push(newChild);
     }
 
-    const lastLine = children.last()?.lastLine ?? index;
+    const lastLine = children.at(-1)?.lastLine ?? index;
     children.sort(compareFn);
     return { children, title, lastLine };
   }
-```
 
-The while-loop condition at lines 191-194 is the trickiest part of the codebase. It
-determines whether the *next* line is a child of the *current* item using Obsidian's
-`ListItemCache.parent` field:
-
-- `parent < 0` → top-level list item (no parent)
-- `parent >= 0` → child item (parent is the line number of its parent)
-
-The condition checks: "is the next line's parent deeper than mine?" — meaning the next
-line is a child (or grandchild) of the current item. It continues consuming lines until
-it hits a sibling or the end.
-
-> **Concern (issue #18):** This logic has no comments and is non-obvious to reason about.
-> A future contributor modifying this would need to understand Obsidian's internal parent
-> pointer semantics.
-
-> **Concern (issue #14):** This algorithm has zero test coverage despite being the most
-> complex code in the plugin.
-
-The flattening step is simple — depth-first traversal:
-
-```bash
-sed -n '212,217p' src/main.ts
-```
-
-```output
   private listPartToList(list: ListPart): Line[] {
     return list.children.reduce<Line[]>(
       (acc, cur) => acc.concat(this.listPartToList(cur)),
@@ -572,40 +403,22 @@ sed -n '212,217p' src/main.ts
   }
 ```
 
-### Heading Sort
+The recursive tree-building uses Obsidian's `ListItemCache.parent` field — a line
+number pointing to the parent item, or a negative value for top-level items. The
+while-loop advances through consecutive lines, recursing into children when the
+parent pointer indicates deeper nesting. After collecting all children, siblings
+are sorted and the tree is flattened back to lines via `listPartToList`.
 
-Headings sort recursively by level first, then alphabetically within the same level.
-Each heading "owns" the content lines below it until the next heading of equal or
-higher rank.
+## Heading Sort
+
+Heading sort builds a tree where each heading owns its content lines and sub-headings,
+then sorts siblings alphabetically within the same heading level.
 
 ```bash
-sed -n '219,282p' src/main.ts
+sed -n '270,310p' src/main.ts
 ```
 
 ```output
-  private sortHeadings() {
-    const ctx = this.getEditorContext(false);
-    if (!ctx) return;
-    const lines = this.getLines(ctx);
-    if (lines.length === 0) return;
-    const res = this.getSortedHeadings(lines, 0, {
-      headingLevel: 0,
-      formatted: "",
-      source: "",
-      lineNumber: -1,
-      checked: false,
-    });
-    this.setLines(ctx, this.headingsToString(res).slice(1));
-  }
-
-  private headingsToString(heading: HeadingPart): Line[] {
-    const list = [heading.title, ...heading.lines];
-    for (const h of heading.headings) {
-      list.push(...this.headingsToString(h));
-    }
-    return list;
-  }
-
   private getSortedHeadings(
     lines: Line[],
     from: number,
@@ -621,7 +434,7 @@ sed -n '219,282p' src/main.ts
 
       if (current.headingLevel) {
         headings.push(this.getSortedHeadings(lines, currentIndex + 1, current));
-        currentIndex = headings.last()?.to ?? currentIndex;
+        currentIndex = headings.at(-1)?.to ?? currentIndex;
       } else {
         contentLines.push(current);
       }
@@ -632,7 +445,7 @@ sed -n '219,282p' src/main.ts
       lines: contentLines,
       to:
         headings.length > 0
-          ? (headings.last()?.to ?? currentIndex - 1)
+          ? (headings.at(-1)?.to ?? currentIndex - 1)
           : currentIndex - 1,
       headings: headings.sort((a, b) => {
         const res = (a.title.headingLevel ?? 0) - (b.title.headingLevel ?? 0);
@@ -649,76 +462,47 @@ sed -n '219,282p' src/main.ts
   }
 ```
 
-### How heading sort works
+The heading sort walks lines linearly. When it encounters a heading of deeper level,
+it recurses. When it hits a heading of equal or shallower level, it returns — that
+heading belongs to a sibling or ancestor. Content lines (non-headings) under a heading
+are preserved in order. Siblings are sorted first by heading level, then alphabetically.
 
-`getSortedHeadings()` performs a recursive descent:
+## Permutations: Reverse and Shuffle
 
-1. **Walk lines** from `from` index forward
-2. **Break** when a heading of equal or higher rank is found (it belongs to the parent)
-3. **If heading found** → recurse into it, then skip past its `to` boundary
-4. **If plain line** → add to this heading's content lines
-5. **Sort child headings:** first by level (lower level = higher rank), then alphabetically
-
-The entry point creates a synthetic level-0 "root" heading to anchor the recursion.
-`headingsToString()` flattens the tree depth-first, and `.slice(1)` removes the
-synthetic root from the output.
-
-Note the sort comparator at line 270: headings of *different* levels sort by level number.
-This means if you have `## Alpha` and `### Beta` as siblings under the same parent, `##`
-sorts first regardless of name. Within the same level, it's alphabetical.
-
-### Length Sort and Permutations
-
-These are the simplest operations — no tree structures, just flat array methods.
+Reverse is trivial (`lines.reverse()`). Shuffle uses a Fisher-Yates algorithm,
+replacing the original dependency on Obsidian's `Array.prototype.shuffle()` patch.
 
 ```bash
-sed -n '284,309p' src/main.ts
+sed -n '342,358p' src/main.ts
 ```
 
 ```output
-  private sortLengthOfLine() {
-    const ctx = this.getEditorContext(false);
-    if (!ctx) return;
-    const lines = this.getLines(ctx);
-    if (lines.length === 0) return;
-    lines.sort((a, b) => a.formatted.length - b.formatted.length);
-    this.setLines(ctx, lines);
-  }
-
-  private permuteReverse() {
-    const ctx = this.getEditorContext(false);
-    if (!ctx) return;
-    const lines = this.getLines(ctx);
-    if (lines.length === 0) return;
-    lines.reverse();
-    this.setLines(ctx, lines);
-  }
-
   private permuteShuffle() {
     const ctx = this.getEditorContext(false);
-    if (!ctx) return;
+    if (!ctx) {
+      new Notice("Sort Lines: no active editor");
+      return;
+    }
     const lines = this.getLines(ctx);
-    if (lines.length === 0) return;
-    lines.shuffle();
+    if (lines.length === 0) {
+      new Notice("Sort Lines: no lines to sort");
+      return;
+    }
+    for (let i = lines.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [lines[i], lines[j]] = [lines[j], lines[i]];
+    }
     this.setLines(ctx, lines);
   }
 ```
 
-Length sort uses `formatted.length` — the character count *after* link/checkbox stripping.
-This means `[[very long link name|short]]` counts as 5 characters ("short"), not the
-full wiki-link syntax.
+## Writing Back: setLines
 
-> **Concern (issue #16):** `lines.shuffle()` at line 307 is not a standard JavaScript
-> method. Obsidian patches `Array.prototype` to add it. This works at runtime but isn't
-> type-safe and breaks in test environments without the Obsidian runtime.
-
-## Phase 4: Writing Results Back
-
-`setLines()` maps the sorted `Line[]` back to text using each line's original `source`
-(preserving all formatting, links, and syntax), then writes it to the editor.
+After sorting, `setLines` writes the `source` text (preserving original formatting)
+back to the editor using either `replaceRange` (selection) or `setValue` (whole document).
 
 ```bash
-sed -n '398,412p' src/main.ts
+sed -n '449,462p' src/main.ts
 ```
 
 ```output
@@ -736,91 +520,12 @@ sed -n '398,412p' src/main.ts
       editor.setValue(text);
     }
   }
-}
 ```
 
-Two write modes:
+## Build System
 
-- **Selection/range** → `editor.replaceRange()` with precise start/end positions
-- **Full document** → `editor.setValue()` (cheaper, replaces everything)
-
-The `endLineLength` ensures the replacement covers the full last line without overflowing
-into the next.
-
-## Test Suite
-
-The tests live alongside the source in `src/main.test.ts`. They use Bun's native test
-runner and re-implement the sorting logic in isolation (not importing from `main.ts`
-directly, since the plugin class requires Obsidian's runtime).
-
-```bash
-grep -c 'test(' src/main.test.ts
-```
-
-```output
-22
-```
-
-```bash
-grep -n 'describe\|  test(' src/main.test.ts
-```
-
-```output
-1:import { describe, expect, test } from "bun:test";
-30:describe("alphabetical sort", () => {
-31:  test("sorts lines alphabetically", () => {
-37:  test("case-insensitive sorting", () => {
-43:  test("numeric sorting", () => {
-50:describe("alphabetical sort with checkboxes", () => {
-51:  test("unchecked items before checked items", () => {
-67:  test("alphabetical within same checkbox state", () => {
-89:describe("sort by length", () => {
-90:  test("sorts by formatted text length", () => {
-102:  test("equal length lines maintain relative order", () => {
-109:describe("reverse", () => {
-110:  test("reverses line order", () => {
-116:  test("single line stays the same", () => {
-123:describe("heading sort", () => {
-178:  test("sorts sibling headings alphabetically", () => {
-191:  test("nested headings sort within parent", () => {
-210:describe("checkbox regex", () => {
-213:  test("matches checked checkbox", () => {
-217:  test("matches uppercase checked checkbox", () => {
-221:  test("does not match unchecked checkbox", () => {
-225:  test("matches indented checkbox", () => {
-229:  test("does not match plain text", () => {
-```
-
-22 test cases across 6 describe blocks. Coverage is focused on core algorithms:
-
-| Suite | Tests | Coverage |
-|---|---|---|
-| Alphabetical sort | 3 | Case-insensitive, numeric-aware |
-| Checkbox-aware sort | 2 | Priority ordering, within-group ordering |
-| Length sort | 2 | Basic + stability |
-| Reverse | 2 | Multi-line + single-line edge case |
-| Heading sort | 2 | Sibling + nested hierarchy |
-| Checkbox regex | 5 | Match/non-match validation |
-
-### Test Coverage Gaps
-
-The following have **no test coverage**:
-
-- **Recursive list sort** (`sortListRecursively`, `getSortedListParts`) — the most complex
-  algorithm
-- **Link/embed replacement** in `getLines()`
-- **Editor context resolution** (`getEditorContext`)
-- **Frontmatter boundary handling**
-- **`setLines()`** write-back logic
-- **Shuffle permutation**
-
-> **Concern (issue #13):** Tests are not run in CI. The workflow at
-> `.github/workflows/main.yml` only runs `bun run check` (typecheck + lint), not
-> `bun test`.
-
-## Build & CI
-
-### Build Configuration
+`build.ts` uses Bun's native bundler. Externals (`obsidian`, `electron`) are not
+bundled — Obsidian provides them at runtime.
 
 ```bash
 cat build.ts
@@ -848,12 +553,13 @@ if (watch) console.log("Watching for changes...");
 export {};
 ```
 
-Bun's native bundler compiles `src/main.ts` into a single `main.js`:
-- **CommonJS** format (required by Obsidian's plugin loader)
-- **Minified** in production, unminified in watch mode
-- **Externals:** `obsidian` and `electron` are not bundled — Obsidian provides them
+## CI and Release Workflows
 
-### CI Workflow
+**CI** (`main.yml`) runs on push to main and pull requests: audit, check (typecheck + biome), test.
+
+**Release** (`release.yml`) triggers on semver tags matching `[0-9]*.[0-9]*.[0-9]*`.
+It runs the full validation pipeline, then creates a GitHub release with `main.js`
+and `manifest.json` as downloadable assets.
 
 ```bash
 cat .github/workflows/main.yml
@@ -873,18 +579,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-
       - run: bun install
       - run: bun audit --audit-level=critical
       - run: bun run check
       - run: bun test
 ```
-
-### Release Workflow
 
 ```bash
 cat .github/workflows/release.yml
@@ -896,7 +598,7 @@ name: Release
 on:
   push:
     tags:
-      - "*"
+      - "[0-9]*.[0-9]*.[0-9]*"
 
 permissions:
   contents: write
@@ -913,7 +615,7 @@ jobs:
 
       - run: |
           bun install
-          bun run build
+          bun run validate
 
       - name: Create release
         uses: softprops/action-gh-release@v2
@@ -926,68 +628,71 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-> **Concern (issue #6):** The release workflow triggers on `tags: ["*"]` — any tag,
-> not just semver version tags. A tag like `experiment-v1` would trigger a release build.
-> Should filter to `tags: ["[0-9]+.[0-9]+.[0-9]+"]` or similar.
+## Tests
 
-> **Concern (issue #19):** Both workflows use `bun-version: latest` without pinning.
-> A breaking Bun update could fail builds unexpectedly.
+The test suite (`src/main.test.ts`) uses Bun's test runner. Tests duplicate the
+core algorithms from the plugin class as standalone functions — necessary because
+the plugin class depends on Obsidian's runtime APIs which aren't available in a
+test environment.
 
-> **Concern (issue #20):** The release workflow doesn't run `bun run validate` before
-> publishing, which would catch version mismatches between `package.json` and
-> `manifest.json`.
+```bash
+grep -n '^describe' src/main.test.ts
+```
 
-## Community Standards Adherence
+```output
+30:describe("alphabetical sort", () => {
+50:describe("alphabetical sort with checkboxes", () => {
+89:describe("sort by length", () => {
+109:describe("reverse", () => {
+123:describe("fisher-yates shuffle", () => {
+148:describe("heading sort", () => {
+235:describe("link replacement by positional splicing", () => {
+334:describe("checkbox regex", () => {
+370:describe("frontmatter boundary calculation", () => {
+```
 
-### Obsidian Plugin Guidelines
+```bash
+bun test 2>&1 | sed 's/\[.*\]/[...]/' | grep -E '(pass|fail|expect|Ran)'
+```
 
-| Guideline | Status | Notes |
-|---|---|---|
-| Single `main.js` entry point | ✅ | Bundled to root |
-| `manifest.json` with required fields | ✅ | id, name, version, minAppVersion |
-| No bundled `obsidian` dependency | ✅ | Externalized |
-| `versions.json` mapping | ✅ | Present and maintained |
-| No `node_modules` in build | ✅ | .gitignore'd |
-| Desktop + mobile support | ✅ | `isDesktopOnly: false` |
-| MIT license | ✅ | Standard for community plugins |
+```output
+ 32 pass
+ 0 fail
+ 32 expect() calls
+Ran 32 tests across 1 file. [...]
+```
 
-### Code Quality
+## Concerns
 
-| Practice | Status | Notes |
-|---|---|---|
-| TypeScript strict mode | ✅ | `strict: true` in tsconfig |
-| Biome linting | ✅ | Configured with organized imports |
-| Automated CI | ⚠️ | Runs checks but not tests |
-| Dependabot | ✅ | Weekly updates for npm + GitHub Actions |
-| Version sync tooling | ✅ | `version-bump.ts` keeps manifests aligned |
+### Code Duplication Between Plugin and Tests
 
-### Missing Community Norms
+The test file duplicates core algorithms (heading sort, link replacement, checkbox
+regex, frontmatter boundary calculation) as standalone functions rather than importing
+from the plugin. This is a practical tradeoff — the plugin class depends on Obsidian's
+runtime — but it means algorithm changes must be mirrored in two places. Extracting
+pure logic into a separate module would allow direct imports in tests.
 
-- **No `styles.css`** — appropriate since this plugin has no UI elements
-- **No settings tab** — the plugin has no user-configurable options
-- **No `onunload()`** — not needed; Obsidian cleans up commands automatically
-- **No mobile testing flag** — `isDesktopOnly: false` is set but mobile behavior is untested
+### Single-File Architecture
 
-## Summary of Open Concerns
+All plugin logic lives in one 463-line file. While still manageable, it's approaching
+the size where extracting modules would improve navigability:
+- Sorting algorithms (alphabetical, heading, list) into their own files
+- Editor context and line extraction as a separate module
+- Data type definitions into a types file
 
-All concerns identified in this walkthrough have corresponding GitHub issues:
+### `Math.random()` for Shuffle
 
-| Issue | Severity | Summary |
-|---|---|---|
-| #5 | HIGH | Link replacement uses string match, not positional |
-| #7 | HIGH | "Current list" matches any section type |
-| #13 | HIGH | Tests not run in CI |
-| #6 | HIGH | Release triggers on any tag |
-| #14 | MEDIUM | No test coverage for recursive list sort |
-| #15 | MEDIUM | Silent failures, no user feedback |
-| #16 | MEDIUM | Shuffle relies on Obsidian prototype patch |
-| #17 | MEDIUM | Checkbox regex matches any non-space character |
-| #18 | MEDIUM | Complex parent-pointer logic uncommented |
-| #19 | LOW | Bun version not pinned in CI |
-| #20 | LOW | Release workflow skips validation |
-| #21 | LOW | No tests for frontmatter boundary handling |
+The Fisher-Yates shuffle uses `Math.random()`, which is fine for a UI shuffle but
+is not cryptographically secure. This is acceptable for the use case.
 
-The plugin is well-structured and focused. The 4-phase pipeline is clean, the
-`source`/`formatted` separation is a good design choice, and the locale-aware collator
-handles international content correctly. The high-severity items are correctness bugs;
-the medium items are maintainability and robustness improvements.
+### No `styles.css` in Release Assets
+
+The release workflow publishes `main.js` and `manifest.json` but not `styles.css`.
+This is correct — the plugin has no custom styles — but Obsidian's community plugin
+submission checklist expects it. If styles are added later, the workflow needs updating.
+
+### `deploy` Script Hardcodes a Path
+
+The `package.json` `deploy` script copies to a specific local vault path. This is
+fine for personal use but would trip up other contributors.
+
