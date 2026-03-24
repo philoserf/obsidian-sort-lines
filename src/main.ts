@@ -372,12 +372,14 @@ export default class SortLinesPlugin extends Plugin {
         checked: CHECKBOX_REGEX.test(line),
       };
 
-      for (const link of links) {
-        if (link.position.start.line !== index) continue;
-        result.formatted = result.formatted.replace(
-          line.substring(link.position.start.col, link.position.end.col),
-          link.displayText ?? "",
-        );
+      const lineLinks = links
+        .filter((link) => link.position.start.line === index)
+        .sort((a, b) => b.position.start.col - a.position.start.col);
+      for (const link of lineLinks) {
+        result.formatted =
+          result.formatted.substring(0, link.position.start.col) +
+          (link.displayText ?? "") +
+          result.formatted.substring(link.position.end.col);
       }
 
       result.formatted = result.formatted.replace(CHECKBOX_REGEX, "$1");
