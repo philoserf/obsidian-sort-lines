@@ -366,3 +366,31 @@ describe("checkbox regex", () => {
     expect(CHECKBOX_REGEX.test("- [/] in progress task")).toBe(true);
   });
 });
+
+describe("frontmatter boundary calculation", () => {
+  function getFrontStart(
+    frontmatter: { position?: { end?: { line?: number } } } | undefined,
+  ): number {
+    return (frontmatter?.position?.end?.line ?? -1) + 1;
+  }
+
+  test("no frontmatter returns 0", () => {
+    expect(getFrontStart(undefined)).toBe(0);
+  });
+
+  test("frontmatter ending at line 3 returns 4", () => {
+    expect(getFrontStart({ position: { end: { line: 3 } } })).toBe(4);
+  });
+
+  test("frontmatter ending at line 0 returns 1", () => {
+    expect(getFrontStart({ position: { end: { line: 0 } } })).toBe(1);
+  });
+
+  test("missing position returns 0", () => {
+    expect(getFrontStart({})).toBe(0);
+  });
+
+  test("missing end returns 0", () => {
+    expect(getFrontStart({ position: {} })).toBe(0);
+  });
+});

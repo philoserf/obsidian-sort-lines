@@ -345,8 +345,7 @@ export default class SortLinesPlugin extends Plugin {
     }
 
     const cursorEndLineLength = editor.getLine(cursorEnd).length;
-    let frontStart = (cache.frontmatter?.position?.end?.line ?? -1) + 1;
-    if (Number.isNaN(frontStart)) frontStart = 0;
+    const frontStart = (cache.frontmatter?.position?.end?.line ?? -1) + 1;
 
     const frontEnd = editor.lastLine();
     const frontEndLineLength = editor.getLine(frontEnd).length;
