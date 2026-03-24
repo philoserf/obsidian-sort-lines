@@ -47,34 +47,9 @@ export default class SortLinesPlugin extends Plugin {
     this.compare = compare;
 
     this.addCommand({
-      id: "sort-alphabetically-with-checkboxes",
-      name: "Sort alphabetically with checkboxes",
-      callback: () => this.sortAlphabetically(false, false),
-    });
-    this.addCommand({
-      id: "sort-list-alphabetically-with-checkboxes",
-      name: "Sort current list alphabetically with checkboxes",
-      callback: () => this.sortAlphabetically(true, false),
-    });
-    this.addCommand({
       id: "sort-alphabetically",
       name: "Sort alphabetically",
       callback: () => this.sortAlphabetically(false, true),
-    });
-    this.addCommand({
-      id: "sort-list-alphabetically",
-      name: "Sort current list alphabetically",
-      callback: () => this.sortAlphabetically(true, true),
-    });
-    this.addCommand({
-      id: "sort-checkboxes",
-      name: "Sort current list by checkboxes",
-      callback: () =>
-        this.sortListRecursively((a, b) => {
-          if (a.title.checked !== b.title.checked)
-            return a.title.checked ? 1 : -1;
-          return 0;
-        }),
     });
     this.addCommand({
       id: "sort-length",
@@ -97,21 +72,13 @@ export default class SortLinesPlugin extends Plugin {
       callback: () => this.permuteShuffle(),
     });
 
-    const alphabetical = (a: ListPart, b: ListPart) =>
-      this.compare(a.title.formatted.trim(), b.title.formatted.trim());
-    const alphabeticalWithCheckboxes = (a: ListPart, b: ListPart) => {
-      if (a.title.checked !== b.title.checked) return a.title.checked ? 1 : -1;
-      return this.compare(a.title.formatted.trim(), b.title.formatted.trim());
-    };
     this.addCommand({
       id: "sort-list-recursively",
       name: "Sort current list recursively",
-      callback: () => this.sortListRecursively(alphabetical),
-    });
-    this.addCommand({
-      id: "sort-list-recursively-with-checkboxes",
-      name: "Sort current list recursively with checkboxes",
-      callback: () => this.sortListRecursively(alphabeticalWithCheckboxes),
+      callback: () =>
+        this.sortListRecursively((a, b) =>
+          this.compare(a.title.formatted.trim(), b.title.formatted.trim()),
+        ),
     });
   }
 
