@@ -190,6 +190,11 @@ export default class SortLinesPlugin extends Plugin {
       return { children: [], title: lines[index], lastLine: index };
     const title = lines[index];
 
+    // Obsidian's ListItemCache.parent is the line number of the parent item,
+    // or a negative value for top-level items (no parent).
+    // This loop collects children: the next line is a child if:
+    //   1. Its parent pointer is deeper than ours (nested under us), OR
+    //   2. We're top-level (parent < 0) and the next item has any parent (is nested)
     while (
       startListCache.parent < (cacheMap.get(index + 1)?.parent ?? -1) ||
       (startListCache.parent < 0 &&
