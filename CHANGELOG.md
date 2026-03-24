@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.0.0
+
+### Removed
+
+- 5 commands: checkbox-aware sorts (handled by other tools) and flat-list sort (redundant with recursive)
+- `checked` field from Line type
+
+### Changed
+
+- Heading sort uses pure alphabetical comparison (previously sorted by level first)
+- `sortAlphabetically` simplified to no-arg method
+- Inlined `headingsToString` and `listPartToList` single-use helpers
+
+### Removed (tests)
+
+- 5 test suites that tested language built-ins rather than plugin logic
+- 5 redundant checkbox regex tests (8 to 3)
+
 ## 1.1.0
 
 ### Added
