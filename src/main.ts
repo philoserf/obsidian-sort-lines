@@ -210,15 +210,14 @@ export default class SortLinesPlugin extends Plugin {
       source: "",
       lineNumber: -1,
     });
-    this.setLines(ctx, this.headingsToString(res).slice(1));
-  }
-
-  private headingsToString(heading: HeadingPart): Line[] {
-    const list = [heading.title, ...heading.lines];
-    for (const h of heading.headings) {
-      list.push(...this.headingsToString(h));
-    }
-    return list;
+    const flatten = (h: HeadingPart): Line[] => {
+      const list = [h.title, ...h.lines];
+      for (const sub of h.headings) {
+        list.push(...flatten(sub));
+      }
+      return list;
+    };
+    this.setLines(ctx, flatten(res).slice(1));
   }
 
   private getSortedHeadings(
@@ -249,16 +248,9 @@ export default class SortLinesPlugin extends Plugin {
         headings.length > 0
           ? (headings.at(-1)?.to ?? currentIndex - 1)
           : currentIndex - 1,
-      headings: headings.sort((a, b) => {
-        const res = (a.title.headingLevel ?? 0) - (b.title.headingLevel ?? 0);
-        if (res === 0) {
-          return this.compare(
-            a.title.formatted.trim(),
-            b.title.formatted.trim(),
-          );
-        }
-        return res;
-      }),
+      headings: headings.sort((a, b) =>
+        this.compare(a.title.formatted.trim(), b.title.formatted.trim()),
+      ),
       title: heading,
     };
   }
