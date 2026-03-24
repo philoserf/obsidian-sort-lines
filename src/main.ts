@@ -6,7 +6,6 @@ interface Line {
   formatted: string;
   headingLevel: number | undefined;
   lineNumber: number;
-  checked: boolean;
 }
 
 interface HeadingPart {
@@ -94,16 +93,7 @@ export default class SortLinesPlugin extends Plugin {
       return;
     }
 
-    if (ignoreCheckboxes) {
-      lines.sort((a, b) =>
-        this.compare(a.formatted.trim(), b.formatted.trim()),
-      );
-    } else {
-      lines.sort((a, b) => {
-        if (a.checked !== b.checked) return a.checked ? 1 : -1;
-        return this.compare(a.formatted.trim(), b.formatted.trim());
-      });
-    }
+    lines.sort((a, b) => this.compare(a.formatted.trim(), b.formatted.trim()));
 
     this.setLines(ctx, lines);
   }
@@ -221,7 +211,6 @@ export default class SortLinesPlugin extends Plugin {
       formatted: "",
       source: "",
       lineNumber: -1,
-      checked: false,
     });
     this.setLines(ctx, this.headingsToString(res).slice(1));
   }
@@ -385,7 +374,6 @@ export default class SortLinesPlugin extends Plugin {
         formatted: line,
         headingLevel: undefined,
         lineNumber: index,
-        checked: CHECKBOX_REGEX.test(line),
       };
 
       const lineLinks = links
