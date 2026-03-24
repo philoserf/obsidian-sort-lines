@@ -5,7 +5,6 @@ interface Line {
   formatted: string;
   headingLevel: number | undefined;
   lineNumber: number;
-  checked: boolean;
 }
 
 function makeLine(source: string, overrides: Partial<Line> = {}): Line {
@@ -14,7 +13,6 @@ function makeLine(source: string, overrides: Partial<Line> = {}): Line {
     formatted: source,
     headingLevel: undefined,
     lineNumber: 0,
-    checked: /^(\s*)- \[[^ ]\]/i.test(source),
     ...overrides,
   };
 }
@@ -63,13 +61,9 @@ describe("heading sort", () => {
         headings.length > 0
           ? (headings[headings.length - 1]?.to ?? currentIndex - 1)
           : currentIndex - 1,
-      headings: headings.sort((a, b) => {
-        const res = (a.title.headingLevel ?? 0) - (b.title.headingLevel ?? 0);
-        if (res === 0) {
-          return compare(a.title.formatted.trim(), b.title.formatted.trim());
-        }
-        return res;
-      }),
+      headings: headings.sort((a, b) =>
+        compare(a.title.formatted.trim(), b.title.formatted.trim()),
+      ),
       title: heading,
     };
   }
