@@ -353,4 +353,16 @@ describe("checkbox regex", () => {
   test("does not match plain text", () => {
     expect(CHECKBOX_REGEX.test("plain text")).toBe(false);
   });
+
+  test("matches cancelled checkbox [-]", () => {
+    expect(CHECKBOX_REGEX.test("- [-] cancelled task")).toBe(true);
+  });
+
+  test("matches question checkbox [?]", () => {
+    expect(CHECKBOX_REGEX.test("- [?] uncertain task")).toBe(true);
+  });
+
+  test("matches partial checkbox [/]", () => {
+    expect(CHECKBOX_REGEX.test("- [/] in progress task")).toBe(true);
+  });
 });

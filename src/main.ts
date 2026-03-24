@@ -30,6 +30,8 @@ interface EditorContext {
   endLineLength: number;
 }
 
+// Matches any non-empty checkbox: [x], [X], [-], [?], [/], [!], etc.
+// Intentionally broad to support Obsidian's alternative checkbox statuses.
 const CHECKBOX_REGEX = /^(\s*)- \[[^ ]\]/i;
 
 export default class SortLinesPlugin extends Plugin {
