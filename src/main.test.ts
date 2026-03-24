@@ -207,6 +207,105 @@ describe("heading sort", () => {
   });
 });
 
+describe("link replacement by positional splicing", () => {
+  interface LinkRef {
+    position: {
+      start: { line: number; col: number };
+      end: { line: number; col: number };
+    };
+    displayText: string | undefined;
+  }
+
+  function replaceLinks(line: string, links: LinkRef[]): string {
+    const sorted = [...links].sort(
+      (a, b) => b.position.start.col - a.position.start.col,
+    );
+    let result = line;
+    for (const link of sorted) {
+      result =
+        result.substring(0, link.position.start.col) +
+        (link.displayText ?? "") +
+        result.substring(link.position.end.col);
+    }
+    return result;
+  }
+
+  test("single link replaced by display text", () => {
+    // "some [[foo]] text" — link at cols 5..14
+    const line = "some [[foo]] text";
+    const links: LinkRef[] = [
+      {
+        position: { start: { line: 0, col: 5 }, end: { line: 0, col: 12 } },
+        displayText: "foo",
+      },
+    ];
+    expect(replaceLinks(line, links)).toBe("some foo text");
+  });
+
+  test("duplicate links replaced at correct positions", () => {
+    // "[[foo]] bar [[foo]]" — two identical link texts
+    const line = "[[foo]] bar [[foo]]";
+    const links: LinkRef[] = [
+      {
+        position: { start: { line: 0, col: 0 }, end: { line: 0, col: 7 } },
+        displayText: "foo",
+      },
+      {
+        position: { start: { line: 0, col: 12 }, end: { line: 0, col: 19 } },
+        displayText: "foo",
+      },
+    ];
+    expect(replaceLinks(line, links)).toBe("foo bar foo");
+  });
+
+  test("multiple different links replaced positionally", () => {
+    // "[[alpha]] and [[beta]]"
+    const line = "[[alpha]] and [[beta]]";
+    const links: LinkRef[] = [
+      {
+        position: { start: { line: 0, col: 0 }, end: { line: 0, col: 9 } },
+        displayText: "alpha",
+      },
+      {
+        position: { start: { line: 0, col: 14 }, end: { line: 0, col: 22 } },
+        displayText: "beta",
+      },
+    ];
+    expect(replaceLinks(line, links)).toBe("alpha and beta");
+  });
+
+  test("link with no display text replaced with empty string", () => {
+    const line = "before [[link]] after";
+    const links: LinkRef[] = [
+      {
+        position: { start: { line: 0, col: 7 }, end: { line: 0, col: 15 } },
+        displayText: undefined,
+      },
+    ];
+    expect(replaceLinks(line, links)).toBe("before  after");
+  });
+
+  test("links provided in forward order still splice correctly", () => {
+    // Ensure right-to-left sorting works regardless of input order
+    const line = "[[a]] [[b]] [[c]]";
+    const links: LinkRef[] = [
+      {
+        position: { start: { line: 0, col: 0 }, end: { line: 0, col: 5 } },
+        displayText: "a",
+      },
+      {
+        position: { start: { line: 0, col: 6 }, end: { line: 0, col: 11 } },
+        displayText: "b",
+      },
+      {
+        position: { start: { line: 0, col: 12 }, end: { line: 0, col: 17 } },
+        displayText: "c",
+      },
+    ];
+    expect(replaceLinks(line, links)).toBe("a b c");
+  });
+});
+
 describe("checkbox regex", () => {
   const CHECKBOX_REGEX = /^(\s*)- \[[^ ]\]/i;
 
