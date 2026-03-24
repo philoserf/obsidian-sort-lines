@@ -304,7 +304,10 @@ export default class SortLinesPlugin extends Plugin {
     if (!ctx) return;
     const lines = this.getLines(ctx);
     if (lines.length === 0) return;
-    lines.shuffle();
+    for (let i = lines.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [lines[i], lines[j]] = [lines[j], lines[i]];
+    }
     this.setLines(ctx, lines);
   }
 
