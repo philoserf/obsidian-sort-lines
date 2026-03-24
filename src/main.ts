@@ -324,6 +324,7 @@ export default class SortLinesPlugin extends Plugin {
     if (fromCurrentList) {
       const list = cache.sections?.find(
         (e) =>
+          e.type === "list" &&
           e.position.start.line <= cursorStart &&
           e.position.end.line >= cursorEnd,
       );
