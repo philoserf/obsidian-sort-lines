@@ -48,7 +48,7 @@ export default class SortLinesPlugin extends Plugin {
     this.addCommand({
       id: "sort-alphabetically",
       name: "Sort alphabetically",
-      callback: () => this.sortAlphabetically(false, true),
+      callback: () => this.sortAlphabetically(),
     });
     this.addCommand({
       id: "sort-length",
@@ -81,8 +81,8 @@ export default class SortLinesPlugin extends Plugin {
     });
   }
 
-  private sortAlphabetically(fromCurrentList = false, ignoreCheckboxes = true) {
-    const ctx = this.getEditorContext(fromCurrentList);
+  private sortAlphabetically() {
+    const ctx = this.getEditorContext(false);
     if (!ctx) {
       new Notice("Sort Lines: no active editor");
       return;
@@ -92,9 +92,7 @@ export default class SortLinesPlugin extends Plugin {
       new Notice("Sort Lines: no lines to sort");
       return;
     }
-
     lines.sort((a, b) => this.compare(a.formatted.trim(), b.formatted.trim()));
-
     this.setLines(ctx, lines);
   }
 
