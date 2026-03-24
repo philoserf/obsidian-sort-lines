@@ -141,8 +141,13 @@ export default class SortLinesPlugin extends Plugin {
     }
     children.sort(compareFn);
 
+    const flatten = (part: ListPart): Line[] =>
+      part.children.reduce<Line[]>(
+        (acc, cur) => acc.concat(flatten(cur)),
+        [part.title],
+      );
     const res = children.reduce<Line[]>(
-      (acc, cur) => acc.concat(this.listPartToList(cur)),
+      (acc, cur) => acc.concat(flatten(cur)),
       [],
     );
     this.setLines(ctx, res);
@@ -184,13 +189,6 @@ export default class SortLinesPlugin extends Plugin {
     const lastLine = children.at(-1)?.lastLine ?? index;
     children.sort(compareFn);
     return { children, title, lastLine };
-  }
-
-  private listPartToList(list: ListPart): Line[] {
-    return list.children.reduce<Line[]>(
-      (acc, cur) => acc.concat(this.listPartToList(cur)),
-      [list.title],
-    );
   }
 
   private sortHeadings() {
