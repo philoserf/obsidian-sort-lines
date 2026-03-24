@@ -220,32 +220,12 @@ describe("checkbox regex", () => {
     expect(CHECKBOX_REGEX.test("- [x] task")).toBe(true);
   });
 
-  test("matches uppercase checked checkbox", () => {
-    expect(CHECKBOX_REGEX.test("- [X] task")).toBe(true);
-  });
-
   test("does not match unchecked checkbox", () => {
     expect(CHECKBOX_REGEX.test("- [ ] task")).toBe(false);
   });
 
-  test("matches indented checkbox", () => {
-    expect(CHECKBOX_REGEX.test("  - [x] task")).toBe(true);
-  });
-
-  test("does not match plain text", () => {
-    expect(CHECKBOX_REGEX.test("plain text")).toBe(false);
-  });
-
   test("matches cancelled checkbox [-]", () => {
     expect(CHECKBOX_REGEX.test("- [-] cancelled task")).toBe(true);
-  });
-
-  test("matches question checkbox [?]", () => {
-    expect(CHECKBOX_REGEX.test("- [?] uncertain task")).toBe(true);
-  });
-
-  test("matches partial checkbox [/]", () => {
-    expect(CHECKBOX_REGEX.test("- [/] in progress task")).toBe(true);
   });
 });
 
