@@ -1,5 +1,5 @@
 import type { CachedMetadata, ListItemCache } from "obsidian";
-import { MarkdownView, Plugin } from "obsidian";
+import { MarkdownView, Notice, Plugin } from "obsidian";
 
 interface Line {
   source: string;
@@ -117,9 +117,15 @@ export default class SortLinesPlugin extends Plugin {
 
   private sortAlphabetically(fromCurrentList = false, ignoreCheckboxes = true) {
     const ctx = this.getEditorContext(fromCurrentList);
-    if (!ctx) return;
+    if (!ctx) {
+      new Notice("Sort Lines: no active editor");
+      return;
+    }
     const lines = this.getLines(ctx);
-    if (lines.length === 0) return;
+    if (lines.length === 0) {
+      new Notice("Sort Lines: no lines to sort");
+      return;
+    }
 
     if (ignoreCheckboxes) {
       lines.sort((a, b) =>
@@ -137,13 +143,19 @@ export default class SortLinesPlugin extends Plugin {
 
   private sortListRecursively(compareFn: (a: ListPart, b: ListPart) => number) {
     const ctx = this.getEditorContext(true);
-    if (!ctx) return;
-    const inputLines = this.getLines(ctx);
-    if (
-      inputLines.length === 0 ||
-      inputLines.find((line) => line.source.trim() === "")
-    )
+    if (!ctx) {
+      new Notice("Sort Lines: no active editor");
       return;
+    }
+    const inputLines = this.getLines(ctx);
+    if (inputLines.length === 0) {
+      new Notice("Sort Lines: no lines to sort");
+      return;
+    }
+    if (inputLines.find((line) => line.source.trim() === "")) {
+      new Notice("Sort Lines: list contains blank lines");
+      return;
+    }
 
     const firstLineNumber = inputLines[0]?.lineNumber;
     if (firstLineNumber == null) return;
@@ -153,7 +165,10 @@ export default class SortLinesPlugin extends Plugin {
     ];
     let index = firstLineNumber;
 
-    if (!ctx.cache.listItems) return;
+    if (!ctx.cache.listItems) {
+      new Notice("Sort Lines: cursor is not inside a list");
+      return;
+    }
     const cacheMap = new Map(
       ctx.cache.listItems.map((item) => [item.position.start.line, item]),
     );
@@ -225,9 +240,15 @@ export default class SortLinesPlugin extends Plugin {
 
   private sortHeadings() {
     const ctx = this.getEditorContext(false);
-    if (!ctx) return;
+    if (!ctx) {
+      new Notice("Sort Lines: no active editor");
+      return;
+    }
     const lines = this.getLines(ctx);
-    if (lines.length === 0) return;
+    if (lines.length === 0) {
+      new Notice("Sort Lines: no lines to sort");
+      return;
+    }
     const res = this.getSortedHeadings(lines, 0, {
       headingLevel: 0,
       formatted: "",
@@ -290,27 +311,45 @@ export default class SortLinesPlugin extends Plugin {
 
   private sortLengthOfLine() {
     const ctx = this.getEditorContext(false);
-    if (!ctx) return;
+    if (!ctx) {
+      new Notice("Sort Lines: no active editor");
+      return;
+    }
     const lines = this.getLines(ctx);
-    if (lines.length === 0) return;
+    if (lines.length === 0) {
+      new Notice("Sort Lines: no lines to sort");
+      return;
+    }
     lines.sort((a, b) => a.formatted.length - b.formatted.length);
     this.setLines(ctx, lines);
   }
 
   private permuteReverse() {
     const ctx = this.getEditorContext(false);
-    if (!ctx) return;
+    if (!ctx) {
+      new Notice("Sort Lines: no active editor");
+      return;
+    }
     const lines = this.getLines(ctx);
-    if (lines.length === 0) return;
+    if (lines.length === 0) {
+      new Notice("Sort Lines: no lines to sort");
+      return;
+    }
     lines.reverse();
     this.setLines(ctx, lines);
   }
 
   private permuteShuffle() {
     const ctx = this.getEditorContext(false);
-    if (!ctx) return;
+    if (!ctx) {
+      new Notice("Sort Lines: no active editor");
+      return;
+    }
     const lines = this.getLines(ctx);
-    if (lines.length === 0) return;
+    if (lines.length === 0) {
+      new Notice("Sort Lines: no lines to sort");
+      return;
+    }
     for (let i = lines.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [lines[i], lines[j]] = [lines[j], lines[i]];
