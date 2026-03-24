@@ -145,7 +145,7 @@ export default class SortLinesPlugin extends Plugin {
     )
       return;
 
-    const firstLineNumber = inputLines.first()?.lineNumber;
+    const firstLineNumber = inputLines[0]?.lineNumber;
     if (firstLineNumber == null) return;
     const lines = [
       ...new Array(firstLineNumber).fill(undefined),
@@ -211,7 +211,7 @@ export default class SortLinesPlugin extends Plugin {
       children.push(newChild);
     }
 
-    const lastLine = children.last()?.lastLine ?? index;
+    const lastLine = children.at(-1)?.lastLine ?? index;
     children.sort(compareFn);
     return { children, title, lastLine };
   }
@@ -261,7 +261,7 @@ export default class SortLinesPlugin extends Plugin {
 
       if (current.headingLevel) {
         headings.push(this.getSortedHeadings(lines, currentIndex + 1, current));
-        currentIndex = headings.last()?.to ?? currentIndex;
+        currentIndex = headings.at(-1)?.to ?? currentIndex;
       } else {
         contentLines.push(current);
       }
@@ -272,7 +272,7 @@ export default class SortLinesPlugin extends Plugin {
       lines: contentLines,
       to:
         headings.length > 0
-          ? (headings.last()?.to ?? currentIndex - 1)
+          ? (headings.at(-1)?.to ?? currentIndex - 1)
           : currentIndex - 1,
       headings: headings.sort((a, b) => {
         const res = (a.title.headingLevel ?? 0) - (b.title.headingLevel ?? 0);
