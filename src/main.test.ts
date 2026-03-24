@@ -120,6 +120,31 @@ describe("reverse", () => {
   });
 });
 
+describe("fisher-yates shuffle", () => {
+  function fisherYatesShuffle<T>(arr: T[]): T[] {
+    const result = [...arr];
+    for (let i = result.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [result[i], result[j]] = [result[j], result[i]];
+    }
+    return result;
+  }
+
+  test("shuffle preserves all elements", () => {
+    const original = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    const shuffled = fisherYatesShuffle(original);
+    expect(shuffled.sort((a, b) => a - b)).toEqual(original);
+  });
+
+  test("shuffle of single element returns same element", () => {
+    expect(fisherYatesShuffle([42])).toEqual([42]);
+  });
+
+  test("shuffle of empty array returns empty array", () => {
+    expect(fisherYatesShuffle([])).toEqual([]);
+  });
+});
+
 describe("heading sort", () => {
   interface HeadingPart {
     to: number;
