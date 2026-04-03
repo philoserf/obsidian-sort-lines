@@ -24,8 +24,6 @@ cat <<'HEREDOC'
 ├── src/
 │   ├── main.ts            # Plugin class — all logic lives here (406 lines)
 │   └── main.test.ts       # Unit tests (252 lines, 15 tests)
-├── scripts/
-│   └── validate-plugin.ts # Pre-release validation script
 ├── build.ts               # Bun bundler config
 ├── version-bump.ts        # Syncs version to manifest + versions.json
 ├── biome.json             # Formatter/linter config
@@ -44,8 +42,6 @@ HEREDOC
 ├── src/
 │   ├── main.ts            # Plugin class — all logic lives here (406 lines)
 │   └── main.test.ts       # Unit tests (252 lines, 15 tests)
-├── scripts/
-│   └── validate-plugin.ts # Pre-release validation script
 ├── build.ts               # Bun bundler config
 ├── version-bump.ts        # Syncs version to manifest + versions.json
 ├── biome.json             # Formatter/linter config
