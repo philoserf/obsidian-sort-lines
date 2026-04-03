@@ -470,14 +470,12 @@ cat build.ts
 ```
 
 ```output
-const watch = process.argv.includes("--watch");
-
 const result = await Bun.build({
   entrypoints: ["src/main.ts"],
   outdir: ".",
   format: "cjs",
   external: ["obsidian", "electron"],
-  minify: !watch,
+  minify: true,
 });
 
 if (!result.success) {
@@ -485,8 +483,6 @@ if (!result.success) {
   for (const message of result.logs) console.error(message);
   process.exit(1);
 }
-
-if (watch) console.log("Watching for changes...");
 
 export {};
 ```
@@ -497,7 +493,7 @@ at runtime.
 ## CI and Release Workflows
 
 **CI** runs on push to main and PRs: audit, check (typecheck + biome), test.
-**Release** triggers on semver tags, runs validation, creates a GitHub release.
+**Release** triggers on semver tags, builds the plugin, creates a GitHub release.
 
 ```bash
 cat .github/workflows/main.yml
@@ -553,7 +549,7 @@ jobs:
 
       - run: |
           bun install
-          bun run validate
+          bun run build
 
       - name: Create release
         uses: softprops/action-gh-release@v2
@@ -583,14 +579,14 @@ grep -n '^describe' src/main.test.ts
 ```
 
 ```bash
-bun test 2>&1 | sed 's/\[.*\]/[...]/' | grep -E '(pass|fail|expect|Ran)'
+bun test 2>&1 | grep -E '^\s+[0-9]+ (pass|fail|expect)|^Ran' | sed 's/ \[.*$//'
 ```
 
 ```output
  15 pass
  0 fail
  15 expect() calls
-Ran 15 tests across 1 file. [...]
+Ran 15 tests across 1 file.
 ```
 
 ## Concerns
@@ -611,4 +607,3 @@ personal use but would trip up other contributors.
 
 The plugin has no custom styles, so this is correct. If styles are added later,
 the release workflow needs updating.
-
