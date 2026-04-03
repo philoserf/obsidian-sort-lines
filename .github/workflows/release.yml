@@ -20,7 +20,7 @@ jobs:
 
       - run: |
           bun install
-          bun run validate
+          bun run build
 
       - name: Create release
         uses: softprops/action-gh-release@v2
