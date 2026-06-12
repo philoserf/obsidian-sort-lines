@@ -1,25 +1,14 @@
-import type { CachedMetadata, ListItemCache } from "obsidian";
+import type { CachedMetadata } from "obsidian";
 import { MarkdownView, Notice, Plugin } from "obsidian";
-
-interface Line {
-  source: string;
-  formatted: string;
-  headingLevel: number | undefined;
-  lineNumber: number;
-}
-
-interface HeadingPart {
-  to: number;
-  title: Line;
-  lines: Line[];
-  headings: HeadingPart[];
-}
-
-interface ListPart {
-  children: ListPart[];
-  title: Line;
-  lastLine: number;
-}
+import {
+  CHECKBOX_REGEX,
+  getFrontStart,
+  type Line,
+  type ListPart,
+  replaceLinksOnLine,
+  sortHeadings,
+  sortListLines,
+} from "./sort";
 
 interface EditorContext {
   view: MarkdownView;
@@ -28,10 +17,6 @@ interface EditorContext {
   end: number;
   endLineLength: number;
 }
-
-// Matches any non-empty checkbox: [x], [X], [-], [?], [/], [!], etc.
-// Intentionally broad to support Obsidian's alternative checkbox statuses.
-const CHECKBOX_REGEX = /^(\s*)- \[[^ ]\]/i;
 
 export default class SortLinesPlugin extends Plugin {
   private compare!: (x: string, y: string) => number;
@@ -111,84 +96,15 @@ export default class SortLinesPlugin extends Plugin {
       new Notice("Sort Lines: list contains blank lines");
       return;
     }
-
-    const firstLineNumber = inputLines[0]?.lineNumber;
-    if (firstLineNumber == null) return;
-    const lines = [
-      ...new Array(firstLineNumber).fill(undefined),
-      ...inputLines,
-    ];
-    let index = firstLineNumber;
-
     if (!ctx.cache.listItems) {
       new Notice("Sort Lines: cursor is not inside a list");
       return;
     }
+
     const cacheMap = new Map(
       ctx.cache.listItems.map((item) => [item.position.start.line, item]),
     );
-
-    const children: ListPart[] = [];
-    while (index < lines.length) {
-      const newChild = this.getSortedListParts(
-        lines,
-        cacheMap,
-        index,
-        compareFn,
-      );
-      children.push(newChild);
-      index = newChild.lastLine + 1;
-    }
-    children.sort(compareFn);
-
-    const flatten = (part: ListPart): Line[] =>
-      part.children.reduce<Line[]>(
-        (acc, cur) => acc.concat(flatten(cur)),
-        [part.title],
-      );
-    const res = children.reduce<Line[]>(
-      (acc, cur) => acc.concat(flatten(cur)),
-      [],
-    );
-    this.setLines(ctx, res);
-  }
-
-  private getSortedListParts(
-    lines: Line[],
-    cacheMap: Map<number, ListItemCache>,
-    index: number,
-    compareFn: (a: ListPart, b: ListPart) => number,
-  ): ListPart {
-    const children: ListPart[] = [];
-    const startListCache = cacheMap.get(index);
-    if (!startListCache)
-      return { children: [], title: lines[index], lastLine: index };
-    const title = lines[index];
-
-    // Obsidian's ListItemCache.parent is the line number of the parent item,
-    // or a negative value for top-level items (no parent).
-    // This loop collects children: the next line is a child if:
-    //   1. Its parent pointer is deeper than ours (nested under us), OR
-    //   2. We're top-level (parent < 0) and the next item has any parent (is nested)
-    while (
-      startListCache.parent < (cacheMap.get(index + 1)?.parent ?? -1) ||
-      (startListCache.parent < 0 &&
-        (cacheMap.get(index + 1)?.parent ?? -1) >= 0)
-    ) {
-      index++;
-      const newChild = this.getSortedListParts(
-        lines,
-        cacheMap,
-        index,
-        compareFn,
-      );
-      index = newChild.lastLine ?? index;
-      children.push(newChild);
-    }
-
-    const lastLine = children.at(-1)?.lastLine ?? index;
-    children.sort(compareFn);
-    return { children, title, lastLine };
+    this.setLines(ctx, sortListLines(inputLines, cacheMap, compareFn));
   }
 
   private sortHeadings() {
@@ -202,55 +118,7 @@ export default class SortLinesPlugin extends Plugin {
       new Notice("Sort Lines: no lines to sort");
       return;
     }
-    const res = this.getSortedHeadings(lines, 0, {
-      headingLevel: 0,
-      formatted: "",
-      source: "",
-      lineNumber: -1,
-    });
-    const flatten = (h: HeadingPart): Line[] => {
-      const list = [h.title, ...h.lines];
-      for (const sub of h.headings) {
-        list.push(...flatten(sub));
-      }
-      return list;
-    };
-    this.setLines(ctx, flatten(res).slice(1));
-  }
-
-  private getSortedHeadings(
-    lines: Line[],
-    from: number,
-    heading: Line,
-  ): HeadingPart {
-    const headings: HeadingPart[] = [];
-    const contentLines: Line[] = [];
-    let currentIndex = from;
-
-    while (currentIndex < lines.length) {
-      const current = lines[currentIndex];
-      if ((current.headingLevel ?? 0) <= (heading.headingLevel ?? 0)) break;
-
-      if (current.headingLevel) {
-        headings.push(this.getSortedHeadings(lines, currentIndex + 1, current));
-        currentIndex = headings.at(-1)?.to ?? currentIndex;
-      } else {
-        contentLines.push(current);
-      }
-      currentIndex++;
-    }
-
-    return {
-      lines: contentLines,
-      to:
-        headings.length > 0
-          ? (headings.at(-1)?.to ?? currentIndex - 1)
-          : currentIndex - 1,
-      headings: headings.sort((a, b) =>
-        this.compare(a.title.formatted.trim(), b.title.formatted.trim()),
-      ),
-      title: heading,
-    };
+    this.setLines(ctx, sortHeadings(lines, this.compare));
   }
 
   private sortLengthOfLine() {
@@ -328,7 +196,7 @@ export default class SortLinesPlugin extends Plugin {
     }
 
     const cursorEndLineLength = editor.getLine(cursorEnd).length;
-    const frontStart = (cache.frontmatter?.position?.end?.line ?? -1) + 1;
+    const frontStart = getFrontStart(cache.frontmatter);
 
     const frontEnd = editor.lastLine();
     const frontEndLineLength = editor.getLine(frontEnd).length;
@@ -357,26 +225,19 @@ export default class SortLinesPlugin extends Plugin {
     const links = [...(ctx.cache.links ?? []), ...(ctx.cache.embeds ?? [])];
 
     const mapped = lines.map((line, index) => {
-      const result: Line = {
+      const lineLinks = links.filter(
+        (link) => link.position.start.line === index,
+      );
+      const formatted = replaceLinksOnLine(line, lineLinks).replace(
+        CHECKBOX_REGEX,
+        "$1",
+      );
+      return {
         source: line,
-        formatted: line,
+        formatted,
         headingLevel: undefined,
         lineNumber: index,
-      };
-
-      const lineLinks = links
-        .filter((link) => link.position.start.line === index)
-        .sort((a, b) => b.position.start.col - a.position.start.col);
-      for (const link of lineLinks) {
-        result.formatted =
-          result.formatted.substring(0, link.position.start.col) +
-          (link.displayText ?? "") +
-          result.formatted.substring(link.position.end.col);
-      }
-
-      result.formatted = result.formatted.replace(CHECKBOX_REGEX, "$1");
-
-      return result;
+      } as Line;
     });
 
     for (const heading of ctx.cache.headings ?? []) {

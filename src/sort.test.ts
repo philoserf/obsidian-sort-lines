@@ -1,11 +1,14 @@
 import { describe, expect, test } from "bun:test";
-
-interface Line {
-  source: string;
-  formatted: string;
-  headingLevel: number | undefined;
-  lineNumber: number;
-}
+import type { ListItemCache } from "obsidian";
+import {
+  CHECKBOX_REGEX,
+  getFrontStart,
+  type Line,
+  type LinkRef,
+  replaceLinksOnLine,
+  sortHeadings,
+  sortListLines,
+} from "./sort";
 
 function makeLine(source: string, overrides: Partial<Line> = {}): Line {
   return {
@@ -25,66 +28,14 @@ const collator = new Intl.Collator("en", {
 });
 const compare = collator.compare;
 
-describe("heading sort", () => {
-  interface HeadingPart {
-    to: number;
-    title: Line;
-    lines: Line[];
-    headings: HeadingPart[];
-  }
-
-  function getSortedHeadings(
-    lines: Line[],
-    from: number,
-    heading: Line,
-  ): HeadingPart {
-    const headings: HeadingPart[] = [];
-    const contentLines: Line[] = [];
-    let currentIndex = from;
-
-    while (currentIndex < lines.length) {
-      const current = lines[currentIndex];
-      if ((current.headingLevel ?? 0) <= (heading.headingLevel ?? 0)) break;
-
-      if (current.headingLevel) {
-        headings.push(getSortedHeadings(lines, currentIndex + 1, current));
-        currentIndex = headings[headings.length - 1]?.to ?? currentIndex;
-      } else {
-        contentLines.push(current);
-      }
-      currentIndex++;
-    }
-
-    return {
-      lines: contentLines,
-      to:
-        headings.length > 0
-          ? (headings[headings.length - 1]?.to ?? currentIndex - 1)
-          : currentIndex - 1,
-      headings: headings.sort((a, b) =>
-        compare(a.title.formatted.trim(), b.title.formatted.trim()),
-      ),
-      title: heading,
-    };
-  }
-
-  function headingsToString(heading: HeadingPart): Line[] {
-    const list = [heading.title, ...heading.lines];
-    for (const h of heading.headings) {
-      list.push(...headingsToString(h));
-    }
-    return list;
-  }
-
+describe("sortHeadings", () => {
   test("sorts sibling headings alphabetically", () => {
     const lines: Line[] = [
       makeLine("## Zebra", { headingLevel: 2, lineNumber: 0 }),
       makeLine("## Apple", { headingLevel: 2, lineNumber: 1 }),
     ];
 
-    const root = makeLine("", { headingLevel: 0, lineNumber: -1 });
-    const result = getSortedHeadings(lines, 0, root);
-    const output = headingsToString(result).slice(1);
+    const output = sortHeadings(lines, compare);
 
     expect(output.map((l) => l.source)).toEqual(["## Apple", "## Zebra"]);
   });
@@ -96,9 +47,7 @@ describe("heading sort", () => {
       makeLine("### Apple", { headingLevel: 3, lineNumber: 2 }),
     ];
 
-    const root = makeLine("", { headingLevel: 0, lineNumber: -1 });
-    const result = getSortedHeadings(lines, 0, root);
-    const output = headingsToString(result).slice(1);
+    const output = sortHeadings(lines, compare);
 
     expect(output.map((l) => l.source)).toEqual([
       "## Parent",
@@ -108,31 +57,9 @@ describe("heading sort", () => {
   });
 });
 
-describe("link replacement by positional splicing", () => {
-  interface LinkRef {
-    position: {
-      start: { line: number; col: number };
-      end: { line: number; col: number };
-    };
-    displayText: string | undefined;
-  }
-
-  function replaceLinks(line: string, links: LinkRef[]): string {
-    const sorted = [...links].sort(
-      (a, b) => b.position.start.col - a.position.start.col,
-    );
-    let result = line;
-    for (const link of sorted) {
-      result =
-        result.substring(0, link.position.start.col) +
-        (link.displayText ?? "") +
-        result.substring(link.position.end.col);
-    }
-    return result;
-  }
-
+describe("replaceLinksOnLine", () => {
   test("single link replaced by display text", () => {
-    // "some [[foo]] text" — link at cols 5..14
+    // "some [[foo]] text" — link at cols 5..12
     const line = "some [[foo]] text";
     const links: LinkRef[] = [
       {
@@ -140,7 +67,7 @@ describe("link replacement by positional splicing", () => {
         displayText: "foo",
       },
     ];
-    expect(replaceLinks(line, links)).toBe("some foo text");
+    expect(replaceLinksOnLine(line, links)).toBe("some foo text");
   });
 
   test("duplicate links replaced at correct positions", () => {
@@ -156,7 +83,7 @@ describe("link replacement by positional splicing", () => {
         displayText: "foo",
       },
     ];
-    expect(replaceLinks(line, links)).toBe("foo bar foo");
+    expect(replaceLinksOnLine(line, links)).toBe("foo bar foo");
   });
 
   test("multiple different links replaced positionally", () => {
@@ -172,7 +99,7 @@ describe("link replacement by positional splicing", () => {
         displayText: "beta",
       },
     ];
-    expect(replaceLinks(line, links)).toBe("alpha and beta");
+    expect(replaceLinksOnLine(line, links)).toBe("alpha and beta");
   });
 
   test("link with no display text replaced with empty string", () => {
@@ -183,7 +110,7 @@ describe("link replacement by positional splicing", () => {
         displayText: undefined,
       },
     ];
-    expect(replaceLinks(line, links)).toBe("before  after");
+    expect(replaceLinksOnLine(line, links)).toBe("before  after");
   });
 
   test("links provided in forward order still splice correctly", () => {
@@ -203,13 +130,11 @@ describe("link replacement by positional splicing", () => {
         displayText: "c",
       },
     ];
-    expect(replaceLinks(line, links)).toBe("a b c");
+    expect(replaceLinksOnLine(line, links)).toBe("a b c");
   });
 });
 
-describe("checkbox regex", () => {
-  const CHECKBOX_REGEX = /^(\s*)- \[[^ ]\]/i;
-
+describe("CHECKBOX_REGEX", () => {
   test("matches checked checkbox", () => {
     expect(CHECKBOX_REGEX.test("- [x] task")).toBe(true);
   });
@@ -223,13 +148,7 @@ describe("checkbox regex", () => {
   });
 });
 
-describe("frontmatter boundary calculation", () => {
-  function getFrontStart(
-    frontmatter: { position?: { end?: { line?: number } } } | undefined,
-  ): number {
-    return (frontmatter?.position?.end?.line ?? -1) + 1;
-  }
-
+describe("getFrontStart", () => {
   test("no frontmatter returns 0", () => {
     expect(getFrontStart(undefined)).toBe(0);
   });
@@ -248,5 +167,75 @@ describe("frontmatter boundary calculation", () => {
 
   test("missing end returns 0", () => {
     expect(getFrontStart({ position: {} })).toBe(0);
+  });
+});
+
+describe("sortListLines", () => {
+  // Obsidian's ListItemCache.parent is the parent's line number, or a
+  // negative value for top-level items.
+  function cacheItem(line: number, parent: number): [number, ListItemCache] {
+    return [
+      line,
+      {
+        parent,
+        position: {
+          start: { line, col: 0, offset: 0 },
+          end: { line, col: 0, offset: 0 },
+        },
+      } as ListItemCache,
+    ];
+  }
+
+  const compareParts = (a: { title: Line }, b: { title: Line }): number =>
+    compare(a.title.formatted.trim(), b.title.formatted.trim());
+
+  test("sorts a flat list", () => {
+    const lines = [
+      makeLine("- b", { lineNumber: 0 }),
+      makeLine("- a", { lineNumber: 1 }),
+    ];
+    const cacheMap = new Map([cacheItem(0, -1), cacheItem(1, -1)]);
+
+    const output = sortListLines(lines, cacheMap, compareParts);
+
+    expect(output.map((l) => l.source)).toEqual(["- a", "- b"]);
+  });
+
+  test("children move with their parent", () => {
+    const lines = [
+      makeLine("- b", { lineNumber: 0 }),
+      makeLine("  - b2", { lineNumber: 1 }),
+      makeLine("- a", { lineNumber: 2 }),
+    ];
+    const cacheMap = new Map([
+      cacheItem(0, -1),
+      cacheItem(1, 0),
+      cacheItem(2, -1),
+    ]);
+
+    const output = sortListLines(lines, cacheMap, compareParts);
+
+    expect(output.map((l) => l.source)).toEqual(["- a", "- b", "  - b2"]);
+  });
+
+  test("nested children sort within their parent", () => {
+    const lines = [
+      makeLine("- parent", { lineNumber: 0 }),
+      makeLine("  - z", { lineNumber: 1 }),
+      makeLine("  - a", { lineNumber: 2 }),
+    ];
+    const cacheMap = new Map([
+      cacheItem(0, -1),
+      cacheItem(1, 0),
+      cacheItem(2, 0),
+    ]);
+
+    const output = sortListLines(lines, cacheMap, compareParts);
+
+    expect(output.map((l) => l.source)).toEqual(["- parent", "  - a", "  - z"]);
+  });
+
+  test("returns input for an empty list", () => {
+    expect(sortListLines([], new Map(), compareParts)).toEqual([]);
   });
 });
