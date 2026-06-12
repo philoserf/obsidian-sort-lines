@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.0.1
+
+### Fixed
+
+- Sort headings no longer deletes content lines under headings (regression from the tooling modernization: a `?? 0` coercion made body lines terminate sections)
+- Sort current list recursively no longer loops forever on lists that do not start at line 0 (past-the-end lines terminated the parent-pointer walk incorrectly)
+
+### Changed
+
+- Extract pure sort algorithms into `sort.ts`; tests import production code instead of re-implementing it (#57)
+- Update dependencies
+
 ## 2.0.0
 
 ### Removed
