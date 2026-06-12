@@ -1,75 +1,83 @@
-# Sort Lines Walkthrough
+# Obsidian Sort Lines Walkthrough
 
-*2026-04-27T14:42:01Z by Showboat 0.6.1*
-<!-- showboat-id: 703723fd-0995-4359-a732-5bce98fa8c7e -->
+*2026-06-12T16:25:56Z by Showboat 0.6.1*
+<!-- showboat-id: a25b7013-5638-43ad-b1ca-1f28ef7f8b07 -->
 
 ## Overview
 
-**Sort Lines** is an Obsidian plugin that sorts and permutes lines, lists, and headings inside notes. Originally forked from Vinzent03/obsidian-sort-and-permute-lines, it is now maintained by Mark Ayers.
+Sort Lines is an Obsidian plugin (id `sort-lines`, forked from
+Vinzent03/obsidian-sort-and-permute-lines) that sorts and permutes lines,
+lists, and headings in the active markdown editor. It is written in
+TypeScript, built with Bun's bundler, linted with Biome, and tested with
+`bun test`.
 
-**Key technologies:** TypeScript, Bun (bundler + test runner), Biome (linter/formatter), Obsidian Plugin API.
+The code splits cleanly in two:
 
-**Six commands:** sort alphabetically, sort by length, sort headings (recursive by level), reverse, shuffle, and sort current list recursively.
+- `src/sort.ts` — the pure algorithms. `sortHeadings`, `sortListLines`,
+  `replaceLinksOnLine`, `getFrontStart`, and `CHECKBOX_REGEX`, plus the
+  `Line` / `HeadingPart` / `ListPart` / `LinkRef` types. No runtime
+  Obsidian dependency (`ListItemCache` is a type-only import), so tests
+  exercise the real production code directly.
+- `src/main.ts` — a thin orchestrator. `SortLinesPlugin` resolves editor
+  state, hands `Line[]` to a sort function, and writes the result back.
 
-**Entry point:** `src/main.ts` exports `SortLinesPlugin` (extends `Plugin`). Bun bundles it to `main.js` (CJS). The plugin ships `main.js` + `manifest.json`.
+Every command follows the same pipeline:
+`getEditorContext` → `getLines` → sort/permute → `setLines`.
 
 ## Architecture
 
-### Directory layout
+Two source files plus one test file; the build emits `main.js` at the
+repo root for Obsidian to load.
 
 ```bash
-echo "src/
-  main.ts          — plugin source (single module)
-  main.test.ts     — unit tests (bun test)
-build.ts           — Bun bundler config
-deploy.ts          — copies artifacts to local vault
-version-bump.ts    — syncs version across package/manifest/versions
-manifest.json      — Obsidian plugin manifest
-package.json       — project metadata and scripts
-biome.json         — linter/formatter config
-tsconfig.json      — TypeScript config (noEmit, strict)
-main.js            — build output (committed, CJS)"
+ls -1 src
 ```
 
 ```output
-src/
-  main.ts          — plugin source (single module)
-  main.test.ts     — unit tests (bun test)
-build.ts           — Bun bundler config
-deploy.ts          — copies artifacts to local vault
-version-bump.ts    — syncs version across package/manifest/versions
-manifest.json      — Obsidian plugin manifest
-package.json       — project metadata and scripts
-biome.json         — linter/formatter config
-tsconfig.json      — TypeScript config (noEmit, strict)
-main.js            — build output (committed, CJS)
+main.ts
+sort.test.ts
+sort.ts
 ```
 
-### Data flow
-
-Every command follows the same pipeline:
-
-1. **`getEditorContext(fromCurrentList)`** — resolves the active `MarkdownView`, its `CachedMetadata`, and the line range (selection, enclosing list, or whole file minus frontmatter).
-2. **`getLines(ctx)`** — splits editor text into `Line[]` with `source` (original) and `formatted` (links resolved to display text, checkboxes stripped). Heading levels come from `cache.headings`.
-3. **Sort/permute** on `Line[]` using `formatted` for comparison, `source` for output.
-4. **`setLines(ctx, lines)`** — writes back via `replaceRange` (selection) or `setValue` (whole file).
-
----
-
-## Core Walkthrough
-
-### Plugin class and `onload`
-
-The plugin is a single default-exported class. `onload()` constructs an `Intl.Collator` once and registers all six commands.
+The module boundary is stated at the top of `sort.ts`: pure functions in,
+pure functions out, with `main.ts` owning all editor and metadata-cache
+interaction.
 
 ```bash
-sed -n "36,46p" src/main.ts
+sed -n '1,11p' src/sort.ts
 ```
 
 ```output
-export default class SortLinesPlugin extends Plugin {
-  private compare!: (x: string, y: string) => number;
+// Pure sorting algorithms — no runtime Obsidian dependency (ListItemCache
+// is a type-only import). main.ts orchestrates editor state around these;
+// tests import them directly.
+import type { ListItemCache } from "obsidian";
 
+export interface Line {
+  source: string;
+  formatted: string;
+  headingLevel: number | undefined;
+  lineNumber: number;
+}
+```
+
+`Line` is the currency of the whole plugin. Each editor line carries two
+strings: `source` (what gets written back, byte-for-byte) and `formatted`
+(what comparisons see — links resolved to display text, checkbox markers
+stripped). `headingLevel` and `lineNumber` come from Obsidian's metadata
+cache and drive the two recursive sorts.
+
+## Plugin entry and command registration
+
+`src/main.ts` default-exports `SortLinesPlugin`. `onload` builds one
+`Intl.Collator` (locale-aware, numeric, punctuation-insensitive) and
+reuses its `compare` everywhere, then registers six commands.
+
+```bash
+sed -n '24,47p' src/main.ts
+```
+
+```output
   override onload() {
     const { compare } = new Intl.Collator(navigator.language, {
       usage: "sort",
@@ -78,219 +86,49 @@ export default class SortLinesPlugin extends Plugin {
       ignorePunctuation: true,
     });
     this.compare = compare;
-```
 
-The collator uses `navigator.language` for locale-aware sorting with `numeric: true` (so "item2" < "item10") and `ignorePunctuation: true`. The `compare` function is stored on the instance and reused by all sort methods.
-
-### Command registration
-
-Six commands are registered in `onload`. Each delegates to a private method:
-
-```bash
-grep -n "this.addCommand" src/main.ts
-```
-
-```output
-48:    this.addCommand({
-53:    this.addCommand({
-58:    this.addCommand({
-63:    this.addCommand({
-68:    this.addCommand({
-74:    this.addCommand({
-```
-
-```bash
-grep -A1 "id:" src/main.ts | grep -E "(id|name):"
-```
-
-```output
+    this.addCommand({
       id: "sort-alphabetically",
       name: "Sort alphabetically",
+      callback: () => this.sortAlphabetically(),
+    });
+    this.addCommand({
       id: "sort-length",
       name: "Sort by length of line",
+      callback: () => this.sortLengthOfLine(),
+    });
+    this.addCommand({
       id: "sort-headings",
       name: "Sort headings",
-      id: "permute-reverse",
-      name: "Reverse lines",
-      id: "permute-shuffle",
-      name: "Shuffle lines",
+      callback: () => this.sortHeadings(),
+    });
+```
+
+The remaining three are reverse, shuffle, and the recursive list sort.
+The list command is the only one that builds a `ListPart` comparator —
+it compares the `formatted` text of each list item's title line.
+
+```bash
+sed -n '59,66p' src/main.ts
+```
+
+```output
+    this.addCommand({
       id: "sort-list-recursively",
       name: "Sort current list recursively",
-```
-
-### Data types
-
-Four interfaces model the domain. `Line` carries both the original source and a display-normalized `formatted` string for comparisons:
-
-```bash
-sed -n "4,31p" src/main.ts
-```
-
-```output
-interface Line {
-  source: string;
-  formatted: string;
-  headingLevel: number | undefined;
-  lineNumber: number;
-}
-
-interface HeadingPart {
-  to: number;
-  title: Line;
-  lines: Line[];
-  headings: HeadingPart[];
-}
-
-interface ListPart {
-  children: ListPart[];
-  title: Line;
-  lastLine: number;
-}
-
-interface EditorContext {
-  view: MarkdownView;
-  cache: CachedMetadata;
-  start: number;
-  end: number;
-  endLineLength: number;
-}
-
-```
-
-`HeadingPart` and `ListPart` are recursive tree structures. `HeadingPart` captures a heading with its content lines and child headings. `ListPart` captures a list item with its children. `EditorContext` bundles the view, metadata cache, and the line range to operate on.
-
-### `getEditorContext` — resolving what to sort
-
-This method determines the scope of the operation. If `fromCurrentList` is true, it finds the enclosing list section from the cache. Otherwise, if there is a selection it uses that range; if not, it uses the whole file after frontmatter.
-
-```bash
-sed -n "304,353p" src/main.ts
-```
-
-```output
-  private getEditorContext(
-    fromCurrentList: boolean,
-  ): EditorContext | undefined {
-    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-    if (!view?.file) return;
-
-    const cache = this.app.metadataCache.getFileCache(view.file);
-    if (!cache) return;
-
-    const editor = view.editor;
-    let cursorStart = editor.getCursor("from").line;
-    let cursorEnd = editor.getCursor("to").line;
-
-    if (fromCurrentList) {
-      const list = cache.sections?.find(
-        (e) =>
-          e.type === "list" &&
-          e.position.start.line <= cursorStart &&
-          e.position.end.line >= cursorEnd,
-      );
-      if (list) {
-        cursorStart = list.position.start.line;
-        cursorEnd = list.position.end.line;
-      }
-    }
-
-    const cursorEndLineLength = editor.getLine(cursorEnd).length;
-    const frontStart = (cache.frontmatter?.position?.end?.line ?? -1) + 1;
-
-    const frontEnd = editor.lastLine();
-    const frontEndLineLength = editor.getLine(frontEnd).length;
-
-    if (cursorStart !== cursorEnd) {
-      return {
-        view,
-        cache,
-        start: cursorStart,
-        end: cursorEnd,
-        endLineLength: cursorEndLineLength,
-      };
-    }
-
-    return {
-      view,
-      cache,
-      start: frontStart,
-      end: frontEnd,
-      endLineLength: frontEndLineLength,
-    };
-  }
-```
-
-Key detail: frontmatter is skipped by computing `(cache.frontmatter?.position?.end?.line ?? -1) + 1`. If no frontmatter exists, this evaluates to `0` (first line). This is tested independently in the test suite.
-
-### `getLines` — building the `Line[]` array
-
-This method produces the normalized `Line[]` from the editor content. Two transformations are applied to each line for the `formatted` field:
-
-```bash
-sed -n "355,390p" src/main.ts
-```
-
-```output
-  private getLines(ctx: EditorContext): Line[] {
-    const lines = ctx.view.editor.getValue().split("\n");
-    const links = [...(ctx.cache.links ?? []), ...(ctx.cache.embeds ?? [])];
-
-    const mapped = lines.map((line, index) => {
-      const result: Line = {
-        source: line,
-        formatted: line,
-        headingLevel: undefined,
-        lineNumber: index,
-      };
-
-      const lineLinks = links
-        .filter((link) => link.position.start.line === index)
-        .sort((a, b) => b.position.start.col - a.position.start.col);
-      for (const link of lineLinks) {
-        result.formatted =
-          result.formatted.substring(0, link.position.start.col) +
-          (link.displayText ?? "") +
-          result.formatted.substring(link.position.end.col);
-      }
-
-      result.formatted = result.formatted.replace(CHECKBOX_REGEX, "$1");
-
-      return result;
+      callback: () =>
+        this.sortListRecursively((a, b) =>
+          this.compare(a.title.formatted.trim(), b.title.formatted.trim()),
+        ),
     });
-
-    for (const heading of ctx.cache.headings ?? []) {
-      mapped[heading.position.start.line].headingLevel = heading.level;
-    }
-
-    if (ctx.start !== ctx.end) {
-      return mapped.slice(ctx.start, ctx.end + 1);
-    }
-    return mapped;
-  }
 ```
 
-**Link replacement:** Obsidian wiki-links like `[[target|display]]` are replaced with just their display text using positional splicing. Links are processed right-to-left (sorted by descending column) so earlier splice positions remain valid.
-
-**Checkbox stripping:** The `CHECKBOX_REGEX` removes checked checkboxes from the formatted text so that `- [x] Task` sorts by "Task" rather than "[x] Task":
+Every command body is the same four-step pipeline; `sortAlphabetically`
+is representative. Each guard failure surfaces a `Notice` instead of
+silently doing nothing.
 
 ```bash
-sed -n "32,34p" src/main.ts
-```
-
-```output
-// Matches any non-empty checkbox: [x], [X], [-], [?], [/], [!], etc.
-// Intentionally broad to support Obsidian's alternative checkbox statuses.
-const CHECKBOX_REGEX = /^(\s*)- \[[^ ]\]/i;
-```
-
-The regex captures leading whitespace (`$1`) so the replacement preserves indentation. It intentionally does not match unchecked `[ ]` boxes — only non-space characters inside the brackets.
-
-### `sortAlphabetically` — the simplest command
-
-Demonstrates the standard pipeline: get context, get lines, sort, set lines.
-
-```bash
-sed -n "84,97p" src/main.ts
+sed -n '69,82p' src/main.ts
 ```
 
 ```output
@@ -310,222 +148,390 @@ sed -n "84,97p" src/main.ts
   }
 ```
 
-All sort methods follow this same pattern. `sortLengthOfLine` compares `a.formatted.length - b.formatted.length`. `permuteReverse` calls `.reverse()`. `permuteShuffle` uses the Fisher-Yates algorithm:
+## Editor context resolution
+
+`getEditorContext(fromCurrentList)` decides *what range of lines* a
+command operates on. It resolves the active `MarkdownView` and its
+`CachedMetadata`, then picks one of three ranges:
+
+1. the user's multi-line selection, if there is one;
+2. for the list command (`fromCurrentList: true`), the enclosing list
+   section from `cache.sections`, expanded from wherever the cursor sits;
+3. otherwise the whole file, minus YAML frontmatter.
 
 ```bash
-sed -n "297,301p" src/main.ts
+sed -n '185,212p' src/main.ts
 ```
 
 ```output
-    for (let i = lines.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [lines[i], lines[j]] = [lines[j], lines[i]];
+    if (fromCurrentList) {
+      const list = cache.sections?.find(
+        (e) =>
+          e.type === "list" &&
+          e.position.start.line <= cursorStart &&
+          e.position.end.line >= cursorEnd,
+      );
+      if (list) {
+        cursorStart = list.position.start.line;
+        cursorEnd = list.position.end.line;
+      }
     }
-    this.setLines(ctx, lines);
+
+    const cursorEndLineLength = editor.getLine(cursorEnd).length;
+    const frontStart = getFrontStart(cache.frontmatter);
+
+    const frontEnd = editor.lastLine();
+    const frontEndLineLength = editor.getLine(frontEnd).length;
+
+    if (cursorStart !== cursorEnd) {
+      return {
+        view,
+        cache,
+        start: cursorStart,
+        end: cursorEnd,
+        endLineLength: cursorEndLineLength,
+      };
+    }
 ```
 
-### `sortHeadings` — recursive heading sort
-
-Heading sort builds a tree of `HeadingPart` nodes, then sorts siblings at each level. The recursion anchor is a synthetic root heading at level 0:
+The frontmatter exclusion is the first pure helper: `getFrontStart`
+returns the line after the frontmatter block, or 0 when there is none.
+The `?? -1` makes every missing-shape case (`undefined`, `{}`,
+`{position:{}}`) collapse to `-1 + 1 = 0`.
 
 ```bash
-sed -n "194,219p" src/main.ts
+sed -n '40,45p' src/sort.ts
 ```
 
 ```output
-  private sortHeadings() {
-    const ctx = this.getEditorContext(false);
-    if (!ctx) {
-      new Notice("Sort Lines: no active editor");
-      return;
-    }
-    const lines = this.getLines(ctx);
-    if (lines.length === 0) {
-      new Notice("Sort Lines: no lines to sort");
-      return;
-    }
-    const res = this.getSortedHeadings(lines, 0, {
-      headingLevel: 0,
-      formatted: "",
-      source: "",
-      lineNumber: -1,
+/** First sortable line: the line after the frontmatter block, or 0. */
+export function getFrontStart(
+  frontmatter: { position?: { end?: { line?: number } } } | undefined,
+): number {
+  return (frontmatter?.position?.end?.line ?? -1) + 1;
+}
+```
+
+## Line shaping: links, checkboxes, headings
+
+`getLines` turns raw editor text into `Line[]`. For each line it gathers
+that line's links and embeds from the cache, rewrites them to display
+text, strips any checkbox marker, then stamps heading levels from
+`cache.headings`. Comparisons therefore see "what the reader sees", not
+the markdown syntax.
+
+```bash
+sed -n '223,251p' src/main.ts
+```
+
+```output
+  private getLines(ctx: EditorContext): Line[] {
+    const lines = ctx.view.editor.getValue().split("\n");
+    const links = [...(ctx.cache.links ?? []), ...(ctx.cache.embeds ?? [])];
+
+    const mapped = lines.map((line, index) => {
+      const lineLinks = links.filter(
+        (link) => link.position.start.line === index,
+      );
+      const formatted = replaceLinksOnLine(line, lineLinks).replace(
+        CHECKBOX_REGEX,
+        "$1",
+      );
+      return {
+        source: line,
+        formatted,
+        headingLevel: undefined,
+        lineNumber: index,
+      } as Line;
     });
-    const flatten = (h: HeadingPart): Line[] => {
-      const list = [h.title, ...h.lines];
-      for (const sub of h.headings) {
-        list.push(...flatten(sub));
-      }
-      return list;
-    };
-    this.setLines(ctx, flatten(res).slice(1));
+
+    for (const heading of ctx.cache.headings ?? []) {
+      mapped[heading.position.start.line].headingLevel = heading.level;
+    }
+
+    if (ctx.start !== ctx.end) {
+      return mapped.slice(ctx.start, ctx.end + 1);
+    }
+    return mapped;
   }
 ```
 
-The `getSortedHeadings` function recurses: it walks lines sequentially, collecting content lines until it hits a heading. When a heading is found, it recurses to collect that headings children. The loop breaks when a same-or-higher-level heading is encountered:
+`replaceLinksOnLine` is the link rewriter. The subtlety: replacing
+`[[foo|Foo]]` with `Foo` shortens the string, which would invalidate the
+column positions of every later link on the line. Sorting the links
+right-to-left and splicing from the end means earlier positions never
+shift.
 
 ```bash
-sed -n "221,254p" src/main.ts
+sed -n '47,63p' src/sort.ts
 ```
 
 ```output
-  private getSortedHeadings(
-    lines: Line[],
-    from: number,
-    heading: Line,
-  ): HeadingPart {
-    const headings: HeadingPart[] = [];
-    const contentLines: Line[] = [];
-    let currentIndex = from;
-
-    while (currentIndex < lines.length) {
-      const current = lines[currentIndex];
-      if ((current.headingLevel ?? 0) <= (heading.headingLevel ?? 0)) break;
-
-      if (current.headingLevel) {
-        headings.push(this.getSortedHeadings(lines, currentIndex + 1, current));
-        currentIndex = headings.at(-1)?.to ?? currentIndex;
-      } else {
-        contentLines.push(current);
-      }
-      currentIndex++;
-    }
-
-    return {
-      lines: contentLines,
-      to:
-        headings.length > 0
-          ? (headings.at(-1)?.to ?? currentIndex - 1)
-          : currentIndex - 1,
-      headings: headings.sort((a, b) =>
-        this.compare(a.title.formatted.trim(), b.title.formatted.trim()),
-      ),
-      title: heading,
-    };
+/**
+ * Replace each link on a line with its display text. Splices right to
+ * left so earlier replacements don't shift later link positions.
+ */
+export function replaceLinksOnLine(line: string, links: LinkRef[]): string {
+  const sorted = [...links].sort(
+    (a, b) => b.position.start.col - a.position.start.col,
+  );
+  let result = line;
+  for (const link of sorted) {
+    result =
+      result.substring(0, link.position.start.col) +
+      (link.displayText ?? "") +
+      result.substring(link.position.end.col);
   }
+  return result;
+}
 ```
 
-### `sortListRecursively` — recursive list sort
-
-List sorting leverages Obsidian's `ListItemCache` which provides parent pointers (line numbers). Negative parent values indicate top-level items. The method builds a `Map` from line number to cache entry, then recursively builds `ListPart` trees:
+`CHECKBOX_REGEX` strips the task marker so `- [x] apple` sorts as
+`apple`, not as `[x] apple`. `[^ ]` deliberately matches any non-space
+status character — Obsidian themes use `[-]`, `[?]`, `[/]`, `[!]` and
+more — while an unchecked `- [ ]` is left alone.
 
 ```bash
-sed -n "99,154p" src/main.ts
+sed -n '36,38p' src/sort.ts
 ```
 
 ```output
-  private sortListRecursively(compareFn: (a: ListPart, b: ListPart) => number) {
-    const ctx = this.getEditorContext(true);
-    if (!ctx) {
-      new Notice("Sort Lines: no active editor");
-      return;
+// Matches any non-empty checkbox: [x], [X], [-], [?], [/], [!], etc.
+// Intentionally broad to support Obsidian's alternative checkbox statuses.
+export const CHECKBOX_REGEX = /^(\s*)- \[[^ ]\]/i;
+```
+
+## Heading sort recursion
+
+`sortHeadings` builds a tree of `HeadingPart`s from the flat line list,
+sorts siblings at each level, and flattens back. A synthetic level-0
+root heading anchors the recursion; `flatten(...).slice(1)` drops it on
+the way out.
+
+The walk in `getSortedHeadings` is where a nasty bug used to live. A
+section ends only when the walk meets a heading at the same-or-higher
+level. An earlier version coerced the *current* line's level with
+`?? 0`, so body lines (`headingLevel: undefined` → 0) also satisfied
+`<= parent level` and terminated the section — the sort silently
+dropped content lines from the document. The fix makes the terminator
+check explicit: only lines that *are* headings can end a section; body
+lines always accumulate into `contentLines`.
+
+```bash
+sed -n '65,107p' src/sort.ts
+```
+
+```output
+function getSortedHeadings(
+  lines: Line[],
+  from: number,
+  heading: Line,
+  compare: Comparator,
+): HeadingPart {
+  const headings: HeadingPart[] = [];
+  const contentLines: Line[] = [];
+  let currentIndex = from;
+
+  while (currentIndex < lines.length) {
+    const current = lines[currentIndex];
+    // Only a heading at the same-or-higher level ends this section; body
+    // lines (headingLevel undefined) are content, never terminators.
+    if (
+      current.headingLevel !== undefined &&
+      current.headingLevel <= (heading.headingLevel ?? 0)
+    )
+      break;
+
+    if (current.headingLevel) {
+      headings.push(
+        getSortedHeadings(lines, currentIndex + 1, current, compare),
+      );
+      currentIndex = headings.at(-1)?.to ?? currentIndex;
+    } else {
+      contentLines.push(current);
     }
-    const inputLines = this.getLines(ctx);
-    if (inputLines.length === 0) {
-      new Notice("Sort Lines: no lines to sort");
-      return;
+    currentIndex++;
+  }
+
+  return {
+    lines: contentLines,
+    to:
+      headings.length > 0
+        ? (headings.at(-1)?.to ?? currentIndex - 1)
+        : currentIndex - 1,
+    headings: headings.sort((a, b) =>
+      compare(a.title.formatted.trim(), b.title.formatted.trim()),
+    ),
+    title: heading,
+  };
+}
+```
+
+The public wrapper plants the synthetic root, recurses once, then
+flattens depth-first — each heading emits its title, its content lines,
+then its (already sorted) subtrees.
+
+```bash
+sed -n '109,129p' src/sort.ts
+```
+
+```output
+/**
+ * Sort headings recursively: siblings sort alphabetically at each level,
+ * content lines stay under their heading.
+ */
+export function sortHeadings(lines: Line[], compare: Comparator): Line[] {
+  const root: Line = {
+    headingLevel: 0,
+    formatted: "",
+    source: "",
+    lineNumber: -1,
+  };
+  const res = getSortedHeadings(lines, 0, root, compare);
+  const flatten = (h: HeadingPart): Line[] => {
+    const list = [h.title, ...h.lines];
+    for (const sub of h.headings) {
+      list.push(...flatten(sub));
     }
+    return list;
+  };
+  return flatten(res).slice(1);
+}
+```
+
+## Recursive list sort
+
+The list sort leans on Obsidian's `ListItemCache`: for every list item
+the cache records `parent` — the *absolute line number* of its parent
+item, or a negative number (the negative of the list's first line) for
+top-level items. Nesting is encoded entirely in these parent pointers,
+not in indentation.
+
+`main.ts` does the editor-side prep: it refuses lists containing blank
+lines, builds a `Map` from line number to cache entry, and delegates.
+
+```bash
+sed -n '95,108p' src/main.ts
+```
+
+```output
     if (inputLines.find((line) => line.source.trim() === "")) {
       new Notice("Sort Lines: list contains blank lines");
       return;
     }
-
-    const firstLineNumber = inputLines[0]?.lineNumber;
-    if (firstLineNumber == null) return;
-    const lines = [
-      ...new Array(firstLineNumber).fill(undefined),
-      ...inputLines,
-    ];
-    let index = firstLineNumber;
-
     if (!ctx.cache.listItems) {
       new Notice("Sort Lines: cursor is not inside a list");
       return;
     }
+
     const cacheMap = new Map(
       ctx.cache.listItems.map((item) => [item.position.start.line, item]),
     );
-
-    const children: ListPart[] = [];
-    while (index < lines.length) {
-      const newChild = this.getSortedListParts(
-        lines,
-        cacheMap,
-        index,
-        compareFn,
-      );
-      children.push(newChild);
-      index = newChild.lastLine + 1;
-    }
-    children.sort(compareFn);
-
-    const flatten = (part: ListPart): Line[] =>
-      part.children.reduce<Line[]>(
-        (acc, cur) => acc.concat(flatten(cur)),
-        [part.title],
-      );
-    const res = children.reduce<Line[]>(
-      (acc, cur) => acc.concat(flatten(cur)),
-      [],
-    );
-    this.setLines(ctx, res);
+    this.setLines(ctx, sortListLines(inputLines, cacheMap, compareFn));
   }
 ```
 
-Key details:
-- Blank lines inside a list abort the sort with a notice (Obsidian's cache can be unreliable with blank lines in lists).
-- The `lines` array is padded with `undefined` entries to align array indices with line numbers, since the list may not start at line 0.
-- `getSortedListParts` recurses using parent pointers to determine nesting:
+`sortListLines` has to reconcile two coordinate systems: the cache's
+parent pointers are absolute line numbers, but the input is only the
+list's slice of the file. It pads the front of the array with
+`undefined` entries so index N really is line N, walks the top-level
+items, sorts, and flattens.
 
 ```bash
-sed -n "156,192p" src/main.ts
+sed -n '172,201p' src/sort.ts
 ```
 
 ```output
-  private getSortedListParts(
-    lines: Line[],
-    cacheMap: Map<number, ListItemCache>,
-    index: number,
-    compareFn: (a: ListPart, b: ListPart) => number,
-  ): ListPart {
-    const children: ListPart[] = [];
-    const startListCache = cacheMap.get(index);
-    if (!startListCache)
-      return { children: [], title: lines[index], lastLine: index };
-    const title = lines[index];
+/**
+ * Sort a list (and every nested sublist) recursively. `inputLines` is the
+ * list's line range; entries are padded to their absolute line numbers so
+ * the cacheMap's parent pointers (absolute line numbers) line up.
+ */
+export function sortListLines(
+  inputLines: Line[],
+  cacheMap: Map<number, ListItemCache>,
+  compareFn: (a: ListPart, b: ListPart) => number,
+): Line[] {
+  const firstLineNumber = inputLines[0]?.lineNumber;
+  if (firstLineNumber == null) return inputLines;
+  const lines = [...new Array(firstLineNumber).fill(undefined), ...inputLines];
+  let index = firstLineNumber;
 
-    // Obsidian's ListItemCache.parent is the line number of the parent item,
-    // or a negative value for top-level items (no parent).
-    // This loop collects children: the next line is a child if:
-    //   1. Its parent pointer is deeper than ours (nested under us), OR
-    //   2. We're top-level (parent < 0) and the next item has any parent (is nested)
-    while (
-      startListCache.parent < (cacheMap.get(index + 1)?.parent ?? -1) ||
-      (startListCache.parent < 0 &&
-        (cacheMap.get(index + 1)?.parent ?? -1) >= 0)
-    ) {
-      index++;
-      const newChild = this.getSortedListParts(
-        lines,
-        cacheMap,
-        index,
-        compareFn,
-      );
-      index = newChild.lastLine ?? index;
-      children.push(newChild);
-    }
-
-    const lastLine = children.at(-1)?.lastLine ?? index;
-    children.sort(compareFn);
-    return { children, title, lastLine };
+  const children: ListPart[] = [];
+  while (index < lines.length) {
+    const newChild = getSortedListParts(lines, cacheMap, index, compareFn);
+    children.push(newChild);
+    index = newChild.lastLine + 1;
   }
+  children.sort(compareFn);
+
+  const flatten = (part: ListPart): Line[] =>
+    part.children.reduce<Line[]>(
+      (acc, cur) => acc.concat(flatten(cur)),
+      [part.title],
+    );
+  return children.reduce<Line[]>((acc, cur) => acc.concat(flatten(cur)), []);
+}
 ```
 
-### `setLines` — writing results back
+`getSortedListParts` is the parent-pointer walk, and `parentAt` is its
+termination guard — the site of the second recent bug. The child-
+collection loop asks "is the next line nested under me?" by comparing
+parent pointers, and treats any missing cache entry as parent `-1`.
 
-The output method is simple: join sorted `source` strings and either replace the selection range or set the entire editor value:
+That was fine for lists starting at line 0, where top-level parents are
+`-1`. But a list starting at line 2 gives its top-level items parent
+`-3`, and once the walk ran past the end of the array, every
+out-of-range lookup also read as `-1` — and `-3 < -1` is true, so
+end-of-list looked like an endless run of children and the loop never
+terminated. The fix: lines *inside* the list with no cache entry
+(continuation lines) still read as `-1`, but lines *past the end* now
+read as `-Infinity`, which no real parent pointer can be greater than.
 
 ```bash
-sed -n "392,405p" src/main.ts
+sed -n '143,170p' src/sort.ts
+```
+
+```output
+  // Obsidian's ListItemCache.parent is the line number of the parent item,
+  // or, for top-level items, the negative of the list's first line. Lines
+  // inside the list with no cache entry (continuation lines) read as -1;
+  // lines past the end read as -Infinity so the walk always terminates —
+  // a top-level parent like -3 (list starting at line 2) is < -1, which
+  // would otherwise treat end-of-list as an endless run of children.
+  const parentAt = (i: number): number =>
+    i < lines.length
+      ? (cacheMap.get(i)?.parent ?? -1)
+      : Number.NEGATIVE_INFINITY;
+
+  // This loop collects children: the next line is a child if:
+  //   1. Its parent pointer is deeper than ours (nested under us), OR
+  //   2. We're top-level (parent < 0) and the next item has any parent (is nested)
+  while (
+    startListCache.parent < parentAt(index + 1) ||
+    (startListCache.parent < 0 && parentAt(index + 1) >= 0)
+  ) {
+    index++;
+    const newChild = getSortedListParts(lines, cacheMap, index, compareFn);
+    index = newChild.lastLine ?? index;
+    children.push(newChild);
+  }
+
+  const lastLine = children.at(-1)?.lastLine ?? index;
+  children.sort(compareFn);
+  return { children, title, lastLine };
+}
+```
+
+## Writing back
+
+`setLines` closes the loop: it joins the sorted `source` strings and
+either splices the selection range with `replaceRange` or replaces the
+whole document with `setValue`. Because only `source` is ever written,
+link syntax and checkbox markers survive sorting untouched.
+
+```bash
+sed -n '253,266p' src/main.ts
 ```
 
 ```output
@@ -545,69 +551,69 @@ sed -n "392,405p" src/main.ts
   }
 ```
 
-### Build system
+## Testing approach
 
-`build.ts` uses Bun's native bundler. A single entry point produces CJS output (required by Obsidian). `obsidian` and `electron` are externalized since Obsidian provides them at runtime:
-
-```bash
-sed -n "5,13p" build.ts
-```
-
-```output
-async function build() {
-  const result = await Bun.build({
-    entrypoints: ["src/main.ts"],
-    outdir: ".",
-    format: "cjs",
-    external: ["obsidian", "electron"],
-    minify: !isWatch,
-    sourcemap: isWatch ? "linked" : "none",
-  });
-```
-
-In watch mode, minification is disabled and source maps are generated. The watcher debounces rebuilds with a 100ms timeout and ignores test files.
-
-### Test suite
-
-Tests use `bun test` and duplicate the core algorithms locally (heading sort, link replacement, checkbox regex, frontmatter boundary) to test them in isolation without the Obsidian runtime:
+Because `sort.ts` has no runtime Obsidian dependency, `src/sort.test.ts`
+imports the real production symbols — the repo's rule is to never
+re-implement an algorithm in a test; if something isn't importable,
+extract it into `sort.ts` first.
 
 ```bash
-grep -c "test(" src/main.test.ts
-```
-
-```output
-18
-```
-
-```bash
-grep "describe\|test(" src/main.test.ts | head -12
+sed -n '1,11p' src/sort.test.ts
 ```
 
 ```output
 import { describe, expect, test } from "bun:test";
-describe("heading sort", () => {
-  test("sorts sibling headings alphabetically", () => {
-  test("nested headings sort within parent", () => {
-describe("link replacement by positional splicing", () => {
-  test("single link replaced by display text", () => {
-  test("duplicate links replaced at correct positions", () => {
-  test("multiple different links replaced positionally", () => {
-  test("link with no display text replaced with empty string", () => {
-  test("links provided in forward order still splice correctly", () => {
-describe("checkbox regex", () => {
-  test("matches checked checkbox", () => {
+import type { ListItemCache } from "obsidian";
+import {
+  CHECKBOX_REGEX,
+  getFrontStart,
+  type Line,
+  type LinkRef,
+  replaceLinksOnLine,
+  sortHeadings,
+  sortListLines,
+} from "./sort";
 ```
 
----
+Both regression bugs are pinned by tests. "content lines stay under
+their heading" guards the heading-sort fix, and this one guards the
+list-sort termination fix — parent `-3` is exactly the shape that used
+to hang:
 
-## Concerns
+```bash
+sed -n '256,266p' src/sort.test.ts
+```
 
-1. **Test duplication:** Core algorithms (`getSortedHeadings`, link replacement) are copy-pasted into the test file since they are private methods on the plugin class. Extracting them as pure functions would eliminate duplication and improve testability.
+```output
+  test("handles a list that does not start at line 0", () => {
+    const lines = [
+      makeLine("- z", { lineNumber: 2 }),
+      makeLine("- a", { lineNumber: 3 }),
+    ];
+    const cacheMap = new Map([cacheItem(2, -3), cacheItem(3, -3)]);
 
-2. **No `onunload` implementation:** The plugin class has no `onunload()` method. While Obsidian's `Plugin` base class handles command cleanup, any future resources (event listeners, intervals) would need explicit teardown.
+    const output = sortListLines(lines, cacheMap, compareParts);
 
-3. **`Line[]` array padding in list sort:** `sortListRecursively` creates an array padded with `undefined` entries to align indices with line numbers. This works but is fragile — accessing a padding slot would produce a runtime error with no type-level protection.
+    expect(output.map((l) => l.source)).toEqual(["- a", "- z"]);
+  });
+```
 
-4. **Single-file architecture:** The entire plugin is one 406-line file. This is fine at current size, but extracting the recursive sort algorithms into a separate module would improve testability (no need to duplicate in tests) and readability.
+The suite covers all five exported pieces (run it with `bun test`;
+counts shown here instead of the timing-laden test output):
 
-5. **Shuffle is non-deterministic:** `permuteShuffle` uses `Math.random()` directly. This makes it untestable without mocking. A seeded RNG or injectable random source would improve test coverage.
+```bash
+echo "describe blocks: $(grep -c '^describe(' src/sort.test.ts)"; echo "tests: $(grep -c '^  test(' src/sort.test.ts)"
+```
+
+```output
+describe blocks: 5
+tests: 21
+```
+
+Five `describe` blocks — `sortHeadings`, `replaceLinksOnLine`,
+`CHECKBOX_REGEX`, `getFrontStart`, `sortListLines` — one per exported
+piece. What the tests don't cover is `main.ts` itself: the orchestrator
+is deliberately thin enough that everything worth testing lives behind
+the pure boundary.
+
