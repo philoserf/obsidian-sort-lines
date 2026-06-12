@@ -74,7 +74,13 @@ function getSortedHeadings(
 
   while (currentIndex < lines.length) {
     const current = lines[currentIndex];
-    if ((current.headingLevel ?? 0) <= (heading.headingLevel ?? 0)) break;
+    // Only a heading at the same-or-higher level ends this section; body
+    // lines (headingLevel undefined) are content, never terminators.
+    if (
+      current.headingLevel !== undefined &&
+      current.headingLevel <= (heading.headingLevel ?? 0)
+    )
+      break;
 
     if (current.headingLevel) {
       headings.push(
@@ -135,13 +141,22 @@ function getSortedListParts(
   const title = lines[index];
 
   // Obsidian's ListItemCache.parent is the line number of the parent item,
-  // or a negative value for top-level items (no parent).
+  // or, for top-level items, the negative of the list's first line. Lines
+  // inside the list with no cache entry (continuation lines) read as -1;
+  // lines past the end read as -Infinity so the walk always terminates —
+  // a top-level parent like -3 (list starting at line 2) is < -1, which
+  // would otherwise treat end-of-list as an endless run of children.
+  const parentAt = (i: number): number =>
+    i < lines.length
+      ? (cacheMap.get(i)?.parent ?? -1)
+      : Number.NEGATIVE_INFINITY;
+
   // This loop collects children: the next line is a child if:
   //   1. Its parent pointer is deeper than ours (nested under us), OR
   //   2. We're top-level (parent < 0) and the next item has any parent (is nested)
   while (
-    startListCache.parent < (cacheMap.get(index + 1)?.parent ?? -1) ||
-    (startListCache.parent < 0 && (cacheMap.get(index + 1)?.parent ?? -1) >= 0)
+    startListCache.parent < parentAt(index + 1) ||
+    (startListCache.parent < 0 && parentAt(index + 1) >= 0)
   ) {
     index++;
     const newChild = getSortedListParts(lines, cacheMap, index, compareFn);

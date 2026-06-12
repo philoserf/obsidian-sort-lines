@@ -55,6 +55,24 @@ describe("sortHeadings", () => {
       "### Zebra",
     ]);
   });
+
+  test("content lines stay under their heading", () => {
+    const lines: Line[] = [
+      makeLine("## Zebra", { headingLevel: 2, lineNumber: 0 }),
+      makeLine("zebra body", { lineNumber: 1 }),
+      makeLine("## Apple", { headingLevel: 2, lineNumber: 2 }),
+      makeLine("apple body", { lineNumber: 3 }),
+    ];
+
+    const output = sortHeadings(lines, compare);
+
+    expect(output.map((l) => l.source)).toEqual([
+      "## Apple",
+      "apple body",
+      "## Zebra",
+      "zebra body",
+    ]);
+  });
 });
 
 describe("replaceLinksOnLine", () => {
@@ -233,6 +251,18 @@ describe("sortListLines", () => {
     const output = sortListLines(lines, cacheMap, compareParts);
 
     expect(output.map((l) => l.source)).toEqual(["- parent", "  - a", "  - z"]);
+  });
+
+  test("handles a list that does not start at line 0", () => {
+    const lines = [
+      makeLine("- z", { lineNumber: 2 }),
+      makeLine("- a", { lineNumber: 3 }),
+    ];
+    const cacheMap = new Map([cacheItem(2, -3), cacheItem(3, -3)]);
+
+    const output = sortListLines(lines, cacheMap, compareParts);
+
+    expect(output.map((l) => l.source)).toEqual(["- a", "- z"]);
   });
 
   test("returns input for an empty list", () => {
