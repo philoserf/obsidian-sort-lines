@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(claude mcp list)",
+      "Bash(gh label list *)",
+      "Bash(claude --version)",
+      "mcp__apple-eventkit__calendar_list_events",
+      "Bash(git check-ignore *)",
+      "Bash(bun test)",
+      "Bash(bun run typecheck)",
+      "Bash(bun run lint)",
+      "Bash(bun run check)"
+    ]
+  }
+}
