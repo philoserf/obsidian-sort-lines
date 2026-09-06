@@ -1,6 +1,6 @@
 {
   "name": "sort-lines",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "description": "Sort and permute lines, lists, and headings in Obsidian",
   "main": "main.js",
   "author": "Mark Ayers",
