@@ -31,11 +31,16 @@ export interface LinkRef {
   displayText?: string;
 }
 
+export interface HeadingRef {
+  level: number;
+  position: { start: { line: number } };
+}
+
 export type Comparator = (x: string, y: string) => number;
 
 // Matches any non-empty checkbox: [x], [X], [-], [?], [/], [!], etc.
 // Intentionally broad to support Obsidian's alternative checkbox statuses.
-export const CHECKBOX_REGEX = /^(\s*)- \[[^ ]\]/i;
+export const CHECKBOX_REGEX = /^(\s*)- \[[^ ]\]/;
 
 /** First sortable line: the line after the frontmatter block, or 0. */
 export function getFrontStart(
@@ -60,6 +65,48 @@ export function replaceLinksOnLine(line: string, links: LinkRef[]): string {
       result.substring(link.position.end.col);
   }
   return result;
+}
+
+/**
+ * Build the sortable `Line[]` for the inclusive range `[start, end]`.
+ *
+ * `end` is inclusive to match `EditorContext.end` — not exclusive like
+ * `Array.slice`, which would truncate the last line. `lineNumber` stays
+ * absolute (the pre-slice index) because `sortListLines` pads to
+ * `inputLines[0].lineNumber` and the cacheMap is keyed by absolute line;
+ * renumbering from zero would silently break list sorting.
+ *
+ * Heading levels are assigned by absolute line before the range is applied.
+ * Positions outside the current text are skipped: Obsidian's metadata cache
+ * can lag the editor during rapid edits, and a stale line number must not
+ * abort the command.
+ */
+export function collectLines(
+  text: string,
+  opts: {
+    links: LinkRef[];
+    headings: HeadingRef[];
+    start: number;
+    end: number;
+  },
+): Line[] {
+  const mapped: Line[] = text.split("\n").map((line, index) => ({
+    source: line,
+    formatted: replaceLinksOnLine(
+      line,
+      opts.links.filter((link) => link.position.start.line === index),
+    ).replace(CHECKBOX_REGEX, "$1"),
+    headingLevel: undefined,
+    lineNumber: index,
+  }));
+
+  for (const heading of opts.headings) {
+    const target = mapped[heading.position.start.line];
+    if (!target) continue;
+    target.headingLevel = heading.level;
+  }
+
+  return mapped.slice(opts.start, opts.end + 1);
 }
 
 function getSortedHeadings(

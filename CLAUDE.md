@@ -8,39 +8,13 @@ Obsidian plugin to sort and permute lines, lists, and headings. Forked from Vinz
 
 The current next step for this repo is tracked in the workspace backlog at `../NEXT.md` (the `obsidian-sort-lines` row). Read it when starting work; update it when that step ships.
 
-## Development Commands
-
-```bash
-bun install              # Install dependencies
-bun run dev              # Watch mode (bun --watch on build.ts)
-bun run build            # Production build (runs check first)
-bun run check            # typecheck + biome check
-bun run typecheck        # tsc --noEmit
-bun run lint             # biome check
-bun run lint:fix         # biome check --write
-bun run format           # biome format --write
-bun run version          # Run version-bump.ts to sync versions
-bun test                 # Run all tests
-bun test src/sort.test.ts -t "pattern"   # Run a single test by name
-bun run deploy           # Copy main.js + manifest.json to local vault plugin dir
-```
-
 ## Architecture
 
-### Entry Point & Commands
+### Module Split
 
-`src/main.ts` exports `SortLinesPlugin` (default export). `onload()` registers six commands: sort alphabetically, sort by length, sort headings, reverse, shuffle, and sort list recursively. An `Intl.Collator` is built once in `onload` and reused as `this.compare`.
+`src/sort.ts` holds the pure algorithms (`sortHeadings`, `sortListLines`, `collectLines`, `replaceLinksOnLine`, `getFrontStart`, `CHECKBOX_REGEX`) and their types (`Line`, `HeadingPart`, `ListPart`, `LinkRef`, `HeadingRef`) — no runtime Obsidian dependency, so tests import them directly. `main.ts` is the thin orchestrator: editor state in, sort.ts functions, editor write back.
 
-`src/sort.ts` holds the pure algorithms (`sortHeadings`, `sortListLines`, `replaceLinksOnLine`, `getFrontStart`, `CHECKBOX_REGEX`) and their types (`Line`, `HeadingPart`, `ListPart`, `LinkRef`) — no runtime Obsidian dependency, so tests import them directly. `main.ts` is the thin orchestrator: editor state in, sort.ts functions, editor write back.
-
-### Core Flow
-
-Every command follows the same pipeline:
-
-1. `getEditorContext(fromCurrentList)` — resolves the active `MarkdownView`, its `CachedMetadata`, and the line range. Range is either the user selection, the enclosing list (for list sort), or the whole file excluding frontmatter.
-2. `getLines(ctx)` — splits editor text, produces `Line[]` with `source` (original) and `formatted` (links resolved to display text, checkboxes stripped via `CHECKBOX_REGEX`). Heading levels come from `cache.headings`.
-3. Sort/permute on `Line[]` using `formatted` for comparison, `source` for output.
-4. `setLines(ctx, lines)` — writes via `replaceRange` (selection) or `setValue` (whole file).
+`collectLines(text, { links, headings, start, end })` builds the `Line[]` for a range. `end` is **inclusive** (it mirrors `EditorContext.end`), and `lineNumber` stays **absolute** — `sortListLines` pads to `inputLines[0].lineNumber` against a cacheMap keyed by absolute line, so renumbering from zero would silently break list sorting.
 
 ### Recursive Structures
 

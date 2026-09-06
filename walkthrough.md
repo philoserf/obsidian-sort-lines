@@ -74,7 +74,7 @@ cache and drive the two recursive sorts.
 reuses its `compare` everywhere, then registers six commands.
 
 ```bash
-sed -n '24,47p' src/main.ts
+sed -n '23,46p' src/main.ts
 ```
 
 ```output
@@ -109,7 +109,7 @@ The list command is the only one that builds a `ListPart` comparator —
 it compares the `formatted` text of each list item's title line.
 
 ```bash
-sed -n '59,66p' src/main.ts
+sed -n '58,65p' src/main.ts
 ```
 
 ```output
@@ -128,7 +128,7 @@ is representative. Each guard failure surfaces a `Notice` instead of
 silently doing nothing.
 
 ```bash
-sed -n '69,82p' src/main.ts
+sed -n '68,81p' src/main.ts
 ```
 
 ```output
@@ -160,7 +160,7 @@ command operates on. It resolves the active `MarkdownView` and its
 3. otherwise the whole file, minus YAML frontmatter.
 
 ```bash
-sed -n '185,212p' src/main.ts
+sed -n '184,211p' src/main.ts
 ```
 
 ```output
@@ -200,7 +200,7 @@ The `?? -1` makes every missing-shape case (`undefined`, `{}`,
 `{position:{}}`) collapse to `-1 + 1 = 0`.
 
 ```bash
-sed -n '40,45p' src/sort.ts
+sed -n '45,50p' src/sort.ts
 ```
 
 ```output
@@ -214,91 +214,71 @@ export function getFrontStart(
 
 ## Line shaping: links, checkboxes, headings
 
-`getLines` turns raw editor text into `Line[]`. For each line it gathers
-that line's links and embeds from the cache, rewrites them to display
-text, strips any checkbox marker, then stamps heading levels from
-`cache.headings`. Comparisons therefore see "what the reader sees", not
+`collectLines` turns raw editor text into the `Line[]` for a range. For
+each line it gathers that line's links and embeds, rewrites them to
+display text, strips any checkbox marker, then stamps heading levels
+from the cache. Comparisons therefore see "what the reader sees", not
 the markdown syntax.
 
+Two contracts are easy to break. `end` is inclusive, matching
+`EditorContext.end` rather than `Array.slice`. And `lineNumber` stays
+absolute — the pre-slice index — because the list sort pads to
+`inputLines[0].lineNumber` against a cacheMap keyed by absolute line.
+
+The heading loop skips positions outside the current text: Obsidian's
+metadata cache can lag the editor during rapid edits, and a stale line
+number must not abort the command.
+
 ```bash
-sed -n '223,251p' src/main.ts
+sed -n '84,110p' src/sort.ts
+```
+
+```output
+export function collectLines(
+  text: string,
+  opts: {
+    links: LinkRef[];
+    headings: HeadingRef[];
+    start: number;
+    end: number;
+  },
+): Line[] {
+  const mapped: Line[] = text.split("\n").map((line, index) => ({
+    source: line,
+    formatted: replaceLinksOnLine(
+      line,
+      opts.links.filter((link) => link.position.start.line === index),
+    ).replace(CHECKBOX_REGEX, "$1"),
+    headingLevel: undefined,
+    lineNumber: index,
+  }));
+
+  for (const heading of opts.headings) {
+    const target = mapped[heading.position.start.line];
+    if (!target) continue;
+    target.headingLevel = heading.level;
+  }
+
+  return mapped.slice(opts.start, opts.end + 1);
+}
+```
+
+`main.ts` keeps only the editor coupling — read the buffer, assemble the
+cache inputs, delegate:
+
+```bash
+sed -n '222,229p' src/main.ts
 ```
 
 ```output
   private getLines(ctx: EditorContext): Line[] {
-    const lines = ctx.view.editor.getValue().split("\n");
-    const links = [...(ctx.cache.links ?? []), ...(ctx.cache.embeds ?? [])];
-
-    const mapped = lines.map((line, index) => {
-      const lineLinks = links.filter(
-        (link) => link.position.start.line === index,
-      );
-      const formatted = replaceLinksOnLine(line, lineLinks).replace(
-        CHECKBOX_REGEX,
-        "$1",
-      );
-      return {
-        source: line,
-        formatted,
-        headingLevel: undefined,
-        lineNumber: index,
-      } as Line;
+    return collectLines(ctx.view.editor.getValue(), {
+      links: [...(ctx.cache.links ?? []), ...(ctx.cache.embeds ?? [])],
+      headings: ctx.cache.headings ?? [],
+      start: ctx.start,
+      end: ctx.end,
     });
-
-    for (const heading of ctx.cache.headings ?? []) {
-      mapped[heading.position.start.line].headingLevel = heading.level;
-    }
-
-    if (ctx.start !== ctx.end) {
-      return mapped.slice(ctx.start, ctx.end + 1);
-    }
-    return mapped;
   }
-```
-
-`replaceLinksOnLine` is the link rewriter. The subtlety: replacing
-`[[foo|Foo]]` with `Foo` shortens the string, which would invalidate the
-column positions of every later link on the line. Sorting the links
-right-to-left and splicing from the end means earlier positions never
-shift.
-
-```bash
-sed -n '47,63p' src/sort.ts
-```
-
-```output
-/**
- * Replace each link on a line with its display text. Splices right to
- * left so earlier replacements don't shift later link positions.
- */
-export function replaceLinksOnLine(line: string, links: LinkRef[]): string {
-  const sorted = [...links].sort(
-    (a, b) => b.position.start.col - a.position.start.col,
-  );
-  let result = line;
-  for (const link of sorted) {
-    result =
-      result.substring(0, link.position.start.col) +
-      (link.displayText ?? "") +
-      result.substring(link.position.end.col);
-  }
-  return result;
-}
-```
-
-`CHECKBOX_REGEX` strips the task marker so `- [x] apple` sorts as
-`apple`, not as `[x] apple`. `[^ ]` deliberately matches any non-space
-status character — Obsidian themes use `[-]`, `[?]`, `[/]`, `[!]` and
-more — while an unchecked `- [ ]` is left alone.
-
-```bash
-sed -n '36,38p' src/sort.ts
-```
-
-```output
-// Matches any non-empty checkbox: [x], [X], [-], [?], [/], [!], etc.
-// Intentionally broad to support Obsidian's alternative checkbox statuses.
-export const CHECKBOX_REGEX = /^(\s*)- \[[^ ]\]/i;
 ```
 
 ## Heading sort recursion
@@ -318,7 +298,7 @@ check explicit: only lines that *are* headings can end a section; body
 lines always accumulate into `contentLines`.
 
 ```bash
-sed -n '65,107p' src/sort.ts
+sed -n '112,154p' src/sort.ts
 ```
 
 ```output
@@ -372,7 +352,7 @@ flattens depth-first — each heading emits its title, its content lines,
 then its (already sorted) subtrees.
 
 ```bash
-sed -n '109,129p' src/sort.ts
+sed -n '156,176p' src/sort.ts
 ```
 
 ```output
@@ -411,7 +391,7 @@ not in indentation.
 lines, builds a `Map` from line number to cache entry, and delegates.
 
 ```bash
-sed -n '95,108p' src/main.ts
+sed -n '94,107p' src/main.ts
 ```
 
 ```output
@@ -438,7 +418,7 @@ list's slice of the file. It pads the front of the array with
 items, sorts, and flattens.
 
 ```bash
-sed -n '172,201p' src/sort.ts
+sed -n '219,248p' src/sort.ts
 ```
 
 ```output
@@ -489,7 +469,7 @@ terminated. The fix: lines *inside* the list with no cache entry
 read as `-Infinity`, which no real parent pointer can be greater than.
 
 ```bash
-sed -n '143,170p' src/sort.ts
+sed -n '190,217p' src/sort.ts
 ```
 
 ```output
@@ -526,29 +506,30 @@ sed -n '143,170p' src/sort.ts
 ## Writing back
 
 `setLines` closes the loop: it joins the sorted `source` strings and
-either splices the selection range with `replaceRange` or replaces the
-whole document with `setValue`. Because only `source` is ever written,
-link syntax and checkbox markers survive sorting untouched.
+splices them over the range with `replaceRange`. Because only `source`
+is ever written, link syntax and checkbox markers survive sorting
+untouched.
+
+This is unconditional. An earlier version branched here, calling
+`setValue` to rewrite the whole document when `start === end`. That was
+inherited from upstream, where "no selection" really did mean the whole
+file — but once frontmatter handling made the no-selection range a
+*sub*-range, the branch corrupted frontmatter on any note with a single
+line below it. Deleting it left one path for every document.
 
 ```bash
-sed -n '253,266p' src/main.ts
+sed -n '231,238p' src/main.ts
 ```
 
 ```output
   private setLines(ctx: EditorContext, lines: Line[]) {
-    const editor = ctx.view.editor;
-    const text = lines.map((e) => e.source).join("\n");
-
-    if (ctx.start !== ctx.end) {
-      editor.replaceRange(
-        text,
-        { line: ctx.start, ch: 0 },
-        { line: ctx.end, ch: ctx.endLineLength },
-      );
-    } else {
-      editor.setValue(text);
-    }
+    ctx.view.editor.replaceRange(
+      lines.map((e) => e.source).join("\n"),
+      { line: ctx.start, ch: 0 },
+      { line: ctx.end, ch: ctx.endLineLength },
+    );
   }
+}
 ```
 
 ## Testing approach
@@ -559,7 +540,7 @@ re-implement an algorithm in a test; if something isn't importable,
 extract it into `sort.ts` first.
 
 ```bash
-sed -n '1,11p' src/sort.test.ts
+sed -n '1,13p' src/sort.test.ts
 ```
 
 ```output
@@ -567,7 +548,9 @@ import { describe, expect, test } from "bun:test";
 import type { ListItemCache } from "obsidian";
 import {
   CHECKBOX_REGEX,
+  collectLines,
   getFrontStart,
+  type HeadingRef,
   type Line,
   type LinkRef,
   replaceLinksOnLine,
@@ -582,7 +565,7 @@ list-sort termination fix — parent `-3` is exactly the shape that used
 to hang:
 
 ```bash
-sed -n '256,266p' src/sort.test.ts
+sed -n '374,384p' src/sort.test.ts
 ```
 
 ```output
