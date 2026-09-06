@@ -102,11 +102,12 @@ export default class SortLinesPlugin extends Plugin {
   }
 
   private sortListRecursively(compareFn: (a: ListPart, b: ListPart) => number) {
-    const ctx = this.getEnclosingListContext();
-    if (!ctx) {
-      new Notice("Sort Lines: no active editor");
+    const found = this.getEnclosingListContext();
+    if ("error" in found) {
+      new Notice(`Sort Lines: ${found.error}`);
       return;
     }
+    const ctx = found.ctx;
     const inputLines = this.getLines(ctx);
     if (inputLines.length === 0) {
       new Notice("Sort Lines: no lines to sort");
@@ -116,13 +117,12 @@ export default class SortLinesPlugin extends Plugin {
       new Notice("Sort Lines: list contains blank lines");
       return;
     }
-    if (!ctx.cache.listItems) {
-      new Notice("Sort Lines: cursor is not inside a list");
-      return;
-    }
 
     const cacheMap = new Map(
-      ctx.cache.listItems.map((item) => [item.position.start.line, item]),
+      (ctx.cache.listItems ?? []).map((item) => [
+        item.position.start.line,
+        item,
+      ]),
     );
     this.setLines(ctx, sortListLines(inputLines, cacheMap, compareFn));
   }
@@ -202,14 +202,22 @@ export default class SortLinesPlugin extends Plugin {
     return this.buildContext(target, resolveSelectionRange(bounds(target)));
   }
 
-  /** The sort range for the list sort: the list enclosing the cursor. */
-  private getEnclosingListContext(): EditorContext | undefined {
+  /**
+   * The sort range for the list sort: the list enclosing the cursor.
+   *
+   * Reports why it failed, because the two reasons need different notices
+   * and neither is "sort the whole document instead".
+   */
+  private getEnclosingListContext():
+    | { ctx: EditorContext }
+    | { error: "no active editor" | "cursor is not inside a list" } {
     const target = this.resolveTarget();
-    if (!target) return;
-    return this.buildContext(
-      target,
-      resolveListRange(bounds(target), target.cache.sections ?? []),
-    );
+    if (!target) return { error: "no active editor" };
+
+    const range = resolveListRange(bounds(target), target.cache.sections ?? []);
+    if (!range) return { error: "cursor is not inside a list" };
+
+    return { ctx: this.buildContext(target, range) };
   }
 
   private resolveTarget(): SortTarget | undefined {

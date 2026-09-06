@@ -392,14 +392,26 @@ describe("resolveListRange", () => {
 
     expect(
       resolveListRange({ ...bounds, from: 4, to: 4 }, [paragraph]),
-    ).toEqual({ start: 0, end: 5 });
+    ).toBeUndefined();
   });
 
-  test("falls back to selection behavior with no enclosing list", () => {
-    expect(resolveListRange({ ...bounds, from: 4, to: 4 }, [])).toEqual({
-      start: 0,
-      end: 5,
-    });
+  test("no sections at all yields no range", () => {
+    expect(resolveListRange({ ...bounds, from: 4, to: 4 }, [])).toBeUndefined();
+  });
+
+  // Falling back to the whole document here ran the list algorithm over
+  // prose: it reordered the document and absorbed following lines into the
+  // nearest list item. The command must decline instead.
+  test("a list elsewhere in the file does not make the cursor's range a list", () => {
+    expect(
+      resolveListRange({ ...bounds, from: 1, to: 1 }, [list(2, 3)]),
+    ).toBeUndefined();
+  });
+
+  test("a cursor spanning past the list's end is not enclosed", () => {
+    expect(
+      resolveListRange({ ...bounds, from: 2, to: 4 }, [list(2, 3)]),
+    ).toBeUndefined();
   });
 });
 

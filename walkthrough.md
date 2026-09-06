@@ -194,35 +194,42 @@ in the range hoisted a blank to the top of every whole-document sort —
 injecting a blank line under the frontmatter and dropping the file's
 trailing newline.
 
-The list resolver looks for the section enclosing the cursor and falls
-back to the default when there is none.
+The list resolver looks for the section enclosing the cursor, and
+answers `undefined` when there is none.
 
 ```bash
-sed -n '126,140p' src/sort.ts
+sed -n '131,143p' src/sort.ts
 ```
 
 ```output
 export function resolveListRange(
   bounds: DocumentBounds,
   sections: SectionRef[],
-): Range {
+): Range | undefined {
   const list = sections.find(
     (s) =>
       s.type === "list" &&
       s.position.start.line <= bounds.from &&
       s.position.end.line >= bounds.to,
   );
-  if (list) {
-    return { start: list.position.start.line, end: list.position.end.line };
-  }
-  return resolveSelectionRange(bounds);
+  if (!list) return;
+  return { start: list.position.start.line, end: list.position.end.line };
 }
 ```
 
-The `if (list)` is load-bearing. A one-item list is a section whose
-start and end are the same line; an earlier version tested
-`start !== end` here, read that as "no list found", and fell through to
-sorting the entire document.
+Two things here are load-bearing, and both were bugs.
+
+The `if (!list) return` is a refusal, not a gap. An earlier version fell
+back to `resolveSelectionRange` — the whole document — so putting the
+cursor in prose and running the list sort ran the list algorithm over
+the entire note, reordering it and absorbing following lines into the
+nearest list item. `sortListRecursively` compounded it by guarding on
+`cache.listItems`, which asks whether the *file* contains a list rather
+than whether the *range* does. "No list here" is an answer.
+
+And a one-item list is a section whose start and end are the same line.
+An earlier version tested `start !== end`, read that as "no list found",
+and fell through the same way.
 
 ## Line shaping: links, checkboxes, headings
 
@@ -242,7 +249,7 @@ metadata cache can lag the editor during rapid edits, and a stale line
 number must not abort the command.
 
 ```bash
-sed -n '156,182p' src/sort.ts
+sed -n '159,185p' src/sort.ts
 ```
 
 ```output
@@ -279,7 +286,7 @@ export function collectLines(
 cache inputs, delegate:
 
 ```bash
-sed -n '236,243p' src/main.ts
+sed -n '244,251p' src/main.ts
 ```
 
 ```output
@@ -310,7 +317,7 @@ check explicit: only lines that *are* headings can end a section; body
 lines always accumulate into `contentLines`.
 
 ```bash
-sed -n '184,227p' src/sort.ts
+sed -n '187,230p' src/sort.ts
 ```
 
 ```output
@@ -365,7 +372,7 @@ flattens depth-first — each heading emits its title, its content lines,
 then its (already sorted) subtrees.
 
 ```bash
-sed -n '229,249p' src/sort.ts
+sed -n '232,252p' src/sort.ts
 ```
 
 ```output
@@ -404,21 +411,32 @@ not in indentation.
 lines, builds a `Map` from line number to cache entry, and delegates.
 
 ```bash
-sed -n '115,128p' src/main.ts
+sed -n '104,128p' src/main.ts
 ```
 
 ```output
+  private sortListRecursively(compareFn: (a: ListPart, b: ListPart) => number) {
+    const found = this.getEnclosingListContext();
+    if ("error" in found) {
+      new Notice(`Sort Lines: ${found.error}`);
+      return;
+    }
+    const ctx = found.ctx;
+    const inputLines = this.getLines(ctx);
+    if (inputLines.length === 0) {
+      new Notice("Sort Lines: no lines to sort");
+      return;
+    }
     if (inputLines.find((line) => line.source.trim() === "")) {
       new Notice("Sort Lines: list contains blank lines");
       return;
     }
-    if (!ctx.cache.listItems) {
-      new Notice("Sort Lines: cursor is not inside a list");
-      return;
-    }
 
     const cacheMap = new Map(
-      ctx.cache.listItems.map((item) => [item.position.start.line, item]),
+      (ctx.cache.listItems ?? []).map((item) => [
+        item.position.start.line,
+        item,
+      ]),
     );
     this.setLines(ctx, sortListLines(inputLines, cacheMap, compareFn));
   }
@@ -431,7 +449,7 @@ list's slice of the file. It pads the front of the array with
 items, sorts, and flattens.
 
 ```bash
-sed -n '298,334p' src/sort.ts
+sed -n '301,337p' src/sort.ts
 ```
 
 ```output
@@ -489,7 +507,7 @@ terminated. The fix: lines *inside* the list with no cache entry
 read as `-Infinity`, which no real parent pointer can be greater than.
 
 ```bash
-sed -n '268,296p' src/sort.ts
+sed -n '271,299p' src/sort.ts
 ```
 
 ```output
@@ -539,7 +557,7 @@ file — but once frontmatter handling made the no-selection range a
 line below it. Deleting it left one path for every document.
 
 ```bash
-sed -n '245,252p' src/main.ts
+sed -n '253,260p' src/main.ts
 ```
 
 ```output
@@ -589,7 +607,7 @@ list-sort termination fix — parent `-3` is exactly the shape that used
 to hang:
 
 ```bash
-sed -n '493,503p' src/sort.test.ts
+sed -n '505,515p' src/sort.test.ts
 ```
 
 ```output
@@ -615,7 +633,7 @@ echo "describe blocks: $(grep -c '^describe(' src/sort.test.ts)"; echo "tests: $
 
 ```output
 describe blocks: 8
-tests: 40
+tests: 42
 ```
 
 Five `describe` blocks — `sortHeadings`, `replaceLinksOnLine`,
