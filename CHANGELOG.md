@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.0.3
+
+### Fixed
+
+- "Sort current list recursively" on a one-item list no longer sorts the entire document, relocating headings and absorbing following prose into the list (#70)
+- Whole-document sorts no longer hoist the file's empty final line to the top, which injected a blank line under the frontmatter and dropped the file's trailing newline (#71)
+
+### Changed
+
+- Split `getEditorContext(fromCurrentList)` into `getSelectionContext()` and `getEnclosingListContext()`, and move range resolution into `sort.ts` where it is unit-testable (#60)
+- Enable `noUncheckedIndexedAccess`; the walks that index by line number now end on a line they cannot read rather than relying on an unstated invariant (#63)
+- Type the padding array in `sortListLines`, which was widening to `any[]` and silently disabling type checking on every line access below it (#58)
+- Build the collator as a class field instead of assigning it in `onload` behind a definite-assignment assertion (#62)
+- Bring `docs/theory.md` back in sync with the code; it still described a test suite that duplicated the algorithms (#65)
+
 ## 2.0.2
 
 ### Fixed
