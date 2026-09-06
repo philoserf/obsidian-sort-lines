@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.0.4
+
+### Fixed
+
+- "Sort current list recursively" no longer sorts the entire document when the cursor sits outside any list. It fell back to the whole document when no list section enclosed the cursor, and its guard checked whether the _file_ contained a list rather than the _range_ — so with a list anywhere else in the note, the list algorithm ran over prose, reordering the document and absorbing following lines into the nearest list item. The command now declines with "cursor is not inside a list" (#73)
+
+### Changed
+
+- Correct the walkthrough's test counts, which had been stale since 2.0.2 (#74)
+
 ## 2.0.3
 
 ### Fixed
