@@ -1,6 +1,7 @@
 import type { CachedMetadata } from "obsidian";
 import { MarkdownView, Notice, Plugin } from "obsidian";
 import {
+  type Comparator,
   collectLines,
   getFrontStart,
   type Line,
@@ -37,17 +38,18 @@ function bounds({ view, cache }: SortTarget) {
 }
 
 export default class SortLinesPlugin extends Plugin {
-  private compare!: (x: string, y: string) => number;
+  // Built at construction, not in onload: a definite-assignment assertion
+  // here would only postpone the failure to whichever method ran first,
+  // reporting it as "this.compare is not a function" with no hint that the
+  // real problem was call order.
+  private readonly compare: Comparator = new Intl.Collator(navigator.language, {
+    usage: "sort",
+    sensitivity: "base",
+    numeric: true,
+    ignorePunctuation: true,
+  }).compare;
 
   override onload() {
-    const { compare } = new Intl.Collator(navigator.language, {
-      usage: "sort",
-      sensitivity: "base",
-      numeric: true,
-      ignorePunctuation: true,
-    });
-    this.compare = compare;
-
     this.addCommand({
       id: "sort-alphabetically",
       name: "Sort alphabetically",
@@ -180,9 +182,15 @@ export default class SortLinesPlugin extends Plugin {
       new Notice("Sort Lines: no lines to sort");
       return;
     }
+    // Fisher-Yates. Both reads are in range for the whole loop; the guard
+    // is what lets the compiler see that without an assertion.
     for (let i = lines.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
-      [lines[i], lines[j]] = [lines[j], lines[i]];
+      const from = lines[i];
+      const to = lines[j];
+      if (!from || !to) continue;
+      lines[i] = to;
+      lines[j] = from;
     }
     this.setLines(ctx, lines);
   }
