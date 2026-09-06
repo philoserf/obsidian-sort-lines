@@ -12,9 +12,9 @@ The current next step for this repo is tracked in the workspace backlog at `../N
 
 ### Module Split
 
-`src/sort.ts` holds the pure algorithms (`sortHeadings`, `sortListLines`, `collectLines`, `replaceLinksOnLine`, `getFrontStart`, `CHECKBOX_REGEX`) and their types (`Line`, `HeadingPart`, `ListPart`, `LinkRef`, `HeadingRef`) — no runtime Obsidian dependency, so tests import them directly. `main.ts` is the thin orchestrator: editor state in, sort.ts functions, editor write back.
+`src/sort.ts` holds the pure algorithms (`sortHeadings`, `sortListLines`, `collectLines`, `resolveSelectionRange`, `resolveListRange`, `replaceLinksOnLine`, `getFrontStart`, `CHECKBOX_REGEX`) and their types (`Line`, `HeadingPart`, `ListPart`, `LinkRef`, `HeadingRef`, `SectionRef`, `Range`) — no runtime Obsidian dependency, so tests import them directly. `main.ts` is the thin orchestrator: editor state in, sort.ts functions, editor write back.
 
-`collectLines(text, { links, headings, start, end })` builds the `Line[]` for a range. `end` is **inclusive** (it mirrors `EditorContext.end`), and `lineNumber` stays **absolute** — `sortListLines` pads to `inputLines[0].lineNumber` against a cacheMap keyed by absolute line, so renumbering from zero would silently break list sorting.
+`resolveSelectionRange` / `resolveListRange` decide *which* lines to sort; `collectLines(text, { links, headings, start, end })` then builds the `Line[]` for that range. `main.ts` reads the editor into a plain `bounds` record and calls them — the range decision itself holds no Obsidian types, so it is unit-testable. `end` is **inclusive** (it mirrors `EditorContext.end`), and `lineNumber` stays **absolute** — `sortListLines` pads to `inputLines[0].lineNumber` against a cacheMap keyed by absolute line, so renumbering from zero would silently break list sorting.
 
 ### Recursive Structures
 

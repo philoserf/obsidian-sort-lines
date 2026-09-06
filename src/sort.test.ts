@@ -8,6 +8,9 @@ import {
   type Line,
   type LinkRef,
   replaceLinksOnLine,
+  resolveListRange,
+  resolveSelectionRange,
+  type SectionRef,
   sortHeadings,
   sortListLines,
 } from "./sort";
@@ -281,6 +284,122 @@ describe("collectLines", () => {
 
     expect(output[0].formatted).toBe("   done");
     expect(output[0].source).toBe("  - [x] done");
+  });
+});
+
+describe("resolveSelectionRange", () => {
+  // A document with no frontmatter and no trailing newline.
+  const plain = { frontStart: 0, lastLine: 4, lastLineEmpty: false };
+
+  test("a multi-line selection is the range", () => {
+    expect(resolveSelectionRange({ ...plain, from: 1, to: 3 })).toEqual({
+      start: 1,
+      end: 3,
+    });
+  });
+
+  test("no selection sorts the whole document below frontmatter", () => {
+    expect(
+      resolveSelectionRange({
+        from: 3,
+        to: 3,
+        frontStart: 3,
+        lastLine: 7,
+        lastLineEmpty: false,
+      }),
+    ).toEqual({ start: 3, end: 7 });
+  });
+
+  // "" collates before everything, so an empty final line would sort to the
+  // top and inject a blank under the frontmatter.
+  test("a trailing empty line is dropped from a whole-document range", () => {
+    expect(
+      resolveSelectionRange({
+        from: 3,
+        to: 3,
+        frontStart: 3,
+        lastLine: 5,
+        lastLineEmpty: true,
+      }),
+    ).toEqual({ start: 3, end: 4 });
+  });
+
+  test("a trailing empty line is dropped from a selection too", () => {
+    // Select-all reaches the empty final line just as the no-selection path does.
+    expect(
+      resolveSelectionRange({
+        from: 0,
+        to: 5,
+        frontStart: 0,
+        lastLine: 5,
+        lastLineEmpty: true,
+      }),
+    ).toEqual({ start: 0, end: 4 });
+  });
+
+  test("an empty line is kept when it is the only line in the range", () => {
+    // Frontmatter plus a trailing newline: dropping it would invert the range.
+    expect(
+      resolveSelectionRange({
+        from: 3,
+        to: 3,
+        frontStart: 3,
+        lastLine: 3,
+        lastLineEmpty: true,
+      }),
+    ).toEqual({ start: 3, end: 3 });
+  });
+
+  test("a frontmatter-only document yields an empty range", () => {
+    const range = resolveSelectionRange({
+      from: 1,
+      to: 1,
+      frontStart: 3,
+      lastLine: 2,
+      lastLineEmpty: false,
+    });
+
+    expect(range.start).toBeGreaterThan(range.end);
+  });
+});
+
+describe("resolveListRange", () => {
+  const bounds = { frontStart: 0, lastLine: 5, lastLineEmpty: false };
+  const list = (start: number, end: number): SectionRef => ({
+    type: "list",
+    position: { start: { line: start }, end: { line: end } },
+  });
+
+  test("the enclosing list section is the range", () => {
+    expect(
+      resolveListRange({ ...bounds, from: 2, to: 2 }, [list(1, 3)]),
+    ).toEqual({ start: 1, end: 3 });
+  });
+
+  // A one-item list is a section whose start and end are the same line.
+  // Treating that as "no range" made the command sort the whole document.
+  test("a one-item list is a range, not an absent one", () => {
+    expect(
+      resolveListRange({ ...bounds, from: 4, to: 4 }, [list(4, 4)]),
+    ).toEqual({ start: 4, end: 4 });
+  });
+
+  test("non-list sections are ignored", () => {
+    const paragraph: SectionRef = {
+      type: "paragraph",
+      position: { start: { line: 4 }, end: { line: 4 } },
+    };
+
+    expect(
+      resolveListRange({ ...bounds, from: 4, to: 4 }, [paragraph]),
+    ).toEqual({ start: 0, end: 5 });
+  });
+
+  test("falls back to selection behavior with no enclosing list", () => {
+    expect(resolveListRange({ ...bounds, from: 4, to: 4 }, [])).toEqual({
+      start: 0,
+      end: 5,
+    });
   });
 });
 

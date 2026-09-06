@@ -36,6 +36,25 @@ export interface HeadingRef {
   position: { start: { line: number } };
 }
 
+export interface SectionRef {
+  type: string;
+  position: { start: { line: number }; end: { line: number } };
+}
+
+/** An inclusive line range: both `start` and `end` are sortable lines. */
+export interface Range {
+  start: number;
+  end: number;
+}
+
+interface DocumentBounds {
+  from: number;
+  to: number;
+  frontStart: number;
+  lastLine: number;
+  lastLineEmpty: boolean;
+}
+
 export type Comparator = (x: string, y: string) => number;
 
 // Matches any non-empty checkbox: [x], [X], [-], [?], [/], [!], etc.
@@ -65,6 +84,59 @@ export function replaceLinksOnLine(line: string, links: LinkRef[]): string {
       result.substring(link.position.end.col);
   }
   return result;
+}
+
+/**
+ * A file that ends in a newline has an empty final line. It is a format
+ * artifact, not content — but it is a line, and `""` collates before
+ * everything, so leaving it in the range hoists a blank to the top of
+ * every sort. Drop it, unless it is the only line in the range.
+ */
+function withoutTrailingEmpty(range: Range, bounds: DocumentBounds): Range {
+  const droppable =
+    range.end === bounds.lastLine &&
+    bounds.lastLineEmpty &&
+    range.end > range.start;
+  return droppable ? { start: range.start, end: range.end - 1 } : range;
+}
+
+/**
+ * The range to sort when no list is involved: an explicit multi-line
+ * selection, else the whole document below the frontmatter.
+ *
+ * A selection inside a single line reads as no selection — `from === to`
+ * — and sorts the whole document, which is long-standing behavior.
+ */
+export function resolveSelectionRange(bounds: DocumentBounds): Range {
+  const range =
+    bounds.from !== bounds.to
+      ? { start: bounds.from, end: bounds.to }
+      : { start: bounds.frontStart, end: bounds.lastLine };
+  return withoutTrailingEmpty(range, bounds);
+}
+
+/**
+ * The range to sort for the list command: the list section enclosing the
+ * cursor, if there is one.
+ *
+ * A one-item list is a section whose start and end are the same line. That
+ * is a range, not an absent one — testing `start !== end` here is what made
+ * the command fall through and sort the whole document instead.
+ */
+export function resolveListRange(
+  bounds: DocumentBounds,
+  sections: SectionRef[],
+): Range {
+  const list = sections.find(
+    (s) =>
+      s.type === "list" &&
+      s.position.start.line <= bounds.from &&
+      s.position.end.line >= bounds.to,
+  );
+  if (list) {
+    return { start: list.position.start.line, end: list.position.end.line };
+  }
+  return resolveSelectionRange(bounds);
 }
 
 /**
