@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import type { ListItemCache } from "obsidian";
 import {
   CHECKBOX_REGEX,
+  collectLines,
   getFrontStart,
+  type HeadingRef,
   type Line,
   type LinkRef,
   replaceLinksOnLine,
@@ -163,6 +165,122 @@ describe("CHECKBOX_REGEX", () => {
 
   test("matches cancelled checkbox [-]", () => {
     expect(CHECKBOX_REGEX.test("- [-] cancelled task")).toBe(true);
+  });
+});
+
+describe("collectLines", () => {
+  const noRefs = { links: [], headings: [] };
+
+  // A note with frontmatter and exactly one content line is the only shape
+  // where start === end, which used to make getLines return the whole
+  // document — frontmatter included — and setLines overwrite the file.
+  test("frontmatter is never swept in when the range is a single line", () => {
+    const text = "---\ntitle: x\n---\n- b";
+
+    const output = collectLines(text, { ...noRefs, start: 3, end: 3 });
+
+    expect(output.map((l) => l.source)).toEqual(["- b"]);
+  });
+
+  test("single-line range keeps its absolute lineNumber", () => {
+    const text = "---\ntitle: x\n---\n- b";
+
+    const output = collectLines(text, { ...noRefs, start: 3, end: 3 });
+
+    expect(output[0].lineNumber).toBe(3);
+  });
+
+  test("frontmatter with only a trailing newline is not swept in", () => {
+    const text = "---\na: 1\n---\n";
+
+    const output = collectLines(text, { ...noRefs, start: 3, end: 3 });
+
+    expect(output.map((l) => l.source)).toEqual([""]);
+  });
+
+  test("start past end yields no lines", () => {
+    const text = "---\na: 1\n---";
+
+    expect(collectLines(text, { ...noRefs, start: 3, end: 2 })).toEqual([]);
+  });
+
+  test("end is inclusive", () => {
+    const output = collectLines("a\nb\nc\nd", { ...noRefs, start: 1, end: 2 });
+
+    expect(output.map((l) => l.source)).toEqual(["b", "c"]);
+  });
+
+  test("heading levels are assigned by absolute line", () => {
+    const headings: HeadingRef[] = [
+      { level: 2, position: { start: { line: 1 } } },
+    ];
+
+    const output = collectLines("intro\n## Heading\nbody", {
+      links: [],
+      headings,
+      start: 0,
+      end: 2,
+    });
+
+    expect(output.map((l) => l.headingLevel)).toEqual([
+      undefined,
+      2,
+      undefined,
+    ]);
+  });
+
+  // Obsidian's metadata cache can lag the editor during rapid edits, so a
+  // heading position can point past the end of the current text.
+  test("a stale heading position past the end is skipped, not thrown on", () => {
+    const headings: HeadingRef[] = [
+      { level: 2, position: { start: { line: 1 } } },
+      { level: 3, position: { start: { line: 99 } } },
+    ];
+
+    const output = collectLines("intro\n## Heading", {
+      links: [],
+      headings,
+      start: 0,
+      end: 1,
+    });
+
+    expect(output.map((l) => l.headingLevel)).toEqual([undefined, 2]);
+  });
+
+  test("links are matched by absolute line, then the range is applied", () => {
+    // "[[a]]" on frontmatter line 1 and on in-range line 4.
+    const links: LinkRef[] = [
+      {
+        position: { start: { line: 1, col: 0 }, end: { line: 1, col: 5 } },
+        displayText: "front",
+      },
+      {
+        position: { start: { line: 4, col: 2 }, end: { line: 4, col: 7 } },
+        displayText: "body",
+      },
+    ];
+
+    const output = collectLines("---\n[[a]]\n---\nplain\n- [[a]]", {
+      links,
+      headings: [],
+      start: 3,
+      end: 4,
+    });
+
+    expect(output.map((l) => l.formatted)).toEqual(["plain", "- body"]);
+  });
+
+  // The marker is replaced by the captured indent, so the separating space
+  // survives — every caller compares on `formatted.trim()`.
+  test("checkbox markers are stripped from formatted, not source", () => {
+    const output = collectLines("  - [x] done", {
+      ...noRefs,
+      start: 0,
+      end: 0,
+    });
+
+    expect(output[0].formatted).toBe("   done");
+    expect(output[0].source).toBe("  - [x] done");
   });
 });
 

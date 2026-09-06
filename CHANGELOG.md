@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.0.2
+
+### Fixed
+
+- Sorting a note with frontmatter and a single line below it no longer shuffles the frontmatter into the body and overwrites the file (#66). The whole-document range is now spliced with `replaceRange` in every case; the `setValue` fallback it replaced dated from upstream, where "no selection" meant the whole file rather than the range below the frontmatter
+- A stale metadata cache no longer aborts a command with a `TypeError` when a heading position points past the end of the document (#64)
+
+### Changed
+
+- Extract `collectLines` into `sort.ts` so the line-shaping and range logic is testable without Obsidian (#66, #64)
+- Drop the inert `i` flag from `CHECKBOX_REGEX` — the pattern contains no letters to case-fold (#61)
+- Remove the non-existent `scripts/` directory from `biome.json` (#59)
+
 ## 2.0.1
 
 ### Fixed

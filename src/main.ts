@@ -1,11 +1,10 @@
 import type { CachedMetadata } from "obsidian";
 import { MarkdownView, Notice, Plugin } from "obsidian";
 import {
-  CHECKBOX_REGEX,
+  collectLines,
   getFrontStart,
   type Line,
   type ListPart,
-  replaceLinksOnLine,
   sortHeadings,
   sortListLines,
 } from "./sort";
@@ -221,47 +220,19 @@ export default class SortLinesPlugin extends Plugin {
   }
 
   private getLines(ctx: EditorContext): Line[] {
-    const lines = ctx.view.editor.getValue().split("\n");
-    const links = [...(ctx.cache.links ?? []), ...(ctx.cache.embeds ?? [])];
-
-    const mapped = lines.map((line, index) => {
-      const lineLinks = links.filter(
-        (link) => link.position.start.line === index,
-      );
-      const formatted = replaceLinksOnLine(line, lineLinks).replace(
-        CHECKBOX_REGEX,
-        "$1",
-      );
-      return {
-        source: line,
-        formatted,
-        headingLevel: undefined,
-        lineNumber: index,
-      } as Line;
+    return collectLines(ctx.view.editor.getValue(), {
+      links: [...(ctx.cache.links ?? []), ...(ctx.cache.embeds ?? [])],
+      headings: ctx.cache.headings ?? [],
+      start: ctx.start,
+      end: ctx.end,
     });
-
-    for (const heading of ctx.cache.headings ?? []) {
-      mapped[heading.position.start.line].headingLevel = heading.level;
-    }
-
-    if (ctx.start !== ctx.end) {
-      return mapped.slice(ctx.start, ctx.end + 1);
-    }
-    return mapped;
   }
 
   private setLines(ctx: EditorContext, lines: Line[]) {
-    const editor = ctx.view.editor;
-    const text = lines.map((e) => e.source).join("\n");
-
-    if (ctx.start !== ctx.end) {
-      editor.replaceRange(
-        text,
-        { line: ctx.start, ch: 0 },
-        { line: ctx.end, ch: ctx.endLineLength },
-      );
-    } else {
-      editor.setValue(text);
-    }
+    ctx.view.editor.replaceRange(
+      lines.map((e) => e.source).join("\n"),
+      { line: ctx.start, ch: 0 },
+      { line: ctx.end, ch: ctx.endLineLength },
+    );
   }
 }
