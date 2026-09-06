@@ -606,7 +606,7 @@ sed -n '493,503p' src/sort.test.ts
   });
 ```
 
-The suite covers all five exported pieces (run it with `bun test`;
+The suite covers every exported piece (run it with `bun test`;
 counts shown here instead of the timing-laden test output):
 
 ```bash
@@ -614,8 +614,8 @@ echo "describe blocks: $(grep -c '^describe(' src/sort.test.ts)"; echo "tests: $
 ```
 
 ```output
-describe blocks: 5
-tests: 21
+describe blocks: 8
+tests: 40
 ```
 
 Five `describe` blocks — `sortHeadings`, `replaceLinksOnLine`,
