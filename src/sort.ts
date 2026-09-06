@@ -117,26 +117,29 @@ export function resolveSelectionRange(bounds: DocumentBounds): Range {
 
 /**
  * The range to sort for the list command: the list section enclosing the
- * cursor, if there is one.
+ * cursor, or `undefined` when the cursor is not in a list.
  *
  * A one-item list is a section whose start and end are the same line. That
  * is a range, not an absent one — testing `start !== end` here is what made
  * the command fall through and sort the whole document instead.
+ *
+ * There is deliberately no fallback. Falling back to the whole document
+ * meant the list algorithm ran over prose whenever the cursor sat outside
+ * a list, reordering the document and absorbing following lines into the
+ * nearest list item. "No list here" is an answer, not a gap to fill.
  */
 export function resolveListRange(
   bounds: DocumentBounds,
   sections: SectionRef[],
-): Range {
+): Range | undefined {
   const list = sections.find(
     (s) =>
       s.type === "list" &&
       s.position.start.line <= bounds.from &&
       s.position.end.line >= bounds.to,
   );
-  if (list) {
-    return { start: list.position.start.line, end: list.position.end.line };
-  }
-  return resolveSelectionRange(bounds);
+  if (!list) return;
+  return { start: list.position.start.line, end: list.position.end.line };
 }
 
 /**
