@@ -22,7 +22,7 @@ The code splits cleanly in two:
   state, hands `Line[]` to a sort function, and writes the result back.
 
 Every command follows the same pipeline:
-`getEditorContext` → `getLines` → sort/permute → `setLines`.
+`getSelectionContext` / `getEnclosingListContext` → `getLines` → sort/permute → `setLines`.
 
 ## Architecture
 
@@ -69,24 +69,19 @@ cache and drive the two recursive sorts.
 
 ## Plugin entry and command registration
 
-`src/main.ts` default-exports `SortLinesPlugin`. `onload` builds one
-`Intl.Collator` (locale-aware, numeric, punctuation-insensitive) and
-reuses its `compare` everywhere, then registers six commands.
+`src/main.ts` default-exports `SortLinesPlugin`. One `Intl.Collator`
+(locale-aware, numeric, punctuation-insensitive) is built as a class
+field and its `compare` reused everywhere; `onload` registers the six
+commands. Building the collator at construction rather than in `onload`
+is deliberate — assigning it in `onload` needed a `!` assertion, which
+only postponed the failure to whichever method ran first.
 
 ```bash
-sed -n '23,46p' src/main.ts
+sed -n '52,87p' src/main.ts
 ```
 
 ```output
   override onload() {
-    const { compare } = new Intl.Collator(navigator.language, {
-      usage: "sort",
-      sensitivity: "base",
-      numeric: true,
-      ignorePunctuation: true,
-    });
-    this.compare = compare;
-
     this.addCommand({
       id: "sort-alphabetically",
       name: "Sort alphabetically",
@@ -102,6 +97,26 @@ sed -n '23,46p' src/main.ts
       name: "Sort headings",
       callback: () => this.sortHeadings(),
     });
+    this.addCommand({
+      id: "permute-reverse",
+      name: "Reverse lines",
+      callback: () => this.permuteReverse(),
+    });
+    this.addCommand({
+      id: "permute-shuffle",
+      name: "Shuffle lines",
+      callback: () => this.permuteShuffle(),
+    });
+
+    this.addCommand({
+      id: "sort-list-recursively",
+      name: "Sort current list recursively",
+      callback: () =>
+        this.sortListRecursively((a, b) =>
+          this.compare(a.title.formatted.trim(), b.title.formatted.trim()),
+        ),
+    });
+  }
 ```
 
 The remaining three are reverse, shuffle, and the recursive list sort.
@@ -109,7 +124,7 @@ The list command is the only one that builds a `ListPart` comparator —
 it compares the `formatted` text of each list item's title line.
 
 ```bash
-sed -n '58,65p' src/main.ts
+sed -n '79,86p' src/main.ts
 ```
 
 ```output
@@ -128,12 +143,12 @@ is representative. Each guard failure surfaces a `Notice` instead of
 silently doing nothing.
 
 ```bash
-sed -n '68,81p' src/main.ts
+sed -n '89,102p' src/main.ts
 ```
 
 ```output
   private sortAlphabetically() {
-    const ctx = this.getEditorContext(false);
+    const ctx = this.getSelectionContext();
     if (!ctx) {
       new Notice("Sort Lines: no active editor");
       return;
@@ -150,67 +165,64 @@ sed -n '68,81p' src/main.ts
 
 ## Editor context resolution
 
-`getEditorContext(fromCurrentList)` decides *what range of lines* a
-command operates on. It resolves the active `MarkdownView` and its
-`CachedMetadata`, then picks one of three ranges:
+Two helpers decide *what range of lines* a command operates on:
+`getSelectionContext` for every command but the list sort, and
+`getEnclosingListContext` for that one. Both resolve the active
+`MarkdownView` and its `CachedMetadata`, read the editor into a plain
+`bounds` record, and hand off to a pure resolver in `sort.ts`.
 
-1. the user's multi-line selection, if there is one;
-2. for the list command (`fromCurrentList: true`), the enclosing list
-   section from `cache.sections`, expanded from wherever the cursor sits;
-3. otherwise the whole file, minus YAML frontmatter.
+The default resolver picks the user's multi-line selection if there is
+one, otherwise the whole file minus YAML frontmatter.
 
 ```bash
-sed -n '184,211p' src/main.ts
+sed -n '110,116p' src/sort.ts
 ```
 
 ```output
-    if (fromCurrentList) {
-      const list = cache.sections?.find(
-        (e) =>
-          e.type === "list" &&
-          e.position.start.line <= cursorStart &&
-          e.position.end.line >= cursorEnd,
-      );
-      if (list) {
-        cursorStart = list.position.start.line;
-        cursorEnd = list.position.end.line;
-      }
-    }
-
-    const cursorEndLineLength = editor.getLine(cursorEnd).length;
-    const frontStart = getFrontStart(cache.frontmatter);
-
-    const frontEnd = editor.lastLine();
-    const frontEndLineLength = editor.getLine(frontEnd).length;
-
-    if (cursorStart !== cursorEnd) {
-      return {
-        view,
-        cache,
-        start: cursorStart,
-        end: cursorEnd,
-        endLineLength: cursorEndLineLength,
-      };
-    }
-```
-
-The frontmatter exclusion is the first pure helper: `getFrontStart`
-returns the line after the frontmatter block, or 0 when there is none.
-The `?? -1` makes every missing-shape case (`undefined`, `{}`,
-`{position:{}}`) collapse to `-1 + 1 = 0`.
-
-```bash
-sed -n '45,50p' src/sort.ts
-```
-
-```output
-/** First sortable line: the line after the frontmatter block, or 0. */
-export function getFrontStart(
-  frontmatter: { position?: { end?: { line?: number } } } | undefined,
-): number {
-  return (frontmatter?.position?.end?.line ?? -1) + 1;
+export function resolveSelectionRange(bounds: DocumentBounds): Range {
+  const range =
+    bounds.from !== bounds.to
+      ? { start: bounds.from, end: bounds.to }
+      : { start: bounds.frontStart, end: bounds.lastLine };
+  return withoutTrailingEmpty(range, bounds);
 }
 ```
+
+The trailing-empty trim is not cosmetic. A file that ends in a newline
+has an empty final line; `""` collates before everything, so leaving it
+in the range hoisted a blank to the top of every whole-document sort —
+injecting a blank line under the frontmatter and dropping the file's
+trailing newline.
+
+The list resolver looks for the section enclosing the cursor and falls
+back to the default when there is none.
+
+```bash
+sed -n '126,140p' src/sort.ts
+```
+
+```output
+export function resolveListRange(
+  bounds: DocumentBounds,
+  sections: SectionRef[],
+): Range {
+  const list = sections.find(
+    (s) =>
+      s.type === "list" &&
+      s.position.start.line <= bounds.from &&
+      s.position.end.line >= bounds.to,
+  );
+  if (list) {
+    return { start: list.position.start.line, end: list.position.end.line };
+  }
+  return resolveSelectionRange(bounds);
+}
+```
+
+The `if (list)` is load-bearing. A one-item list is a section whose
+start and end are the same line; an earlier version tested
+`start !== end` here, read that as "no list found", and fell through to
+sorting the entire document.
 
 ## Line shaping: links, checkboxes, headings
 
@@ -230,7 +242,7 @@ metadata cache can lag the editor during rapid edits, and a stale line
 number must not abort the command.
 
 ```bash
-sed -n '84,110p' src/sort.ts
+sed -n '156,182p' src/sort.ts
 ```
 
 ```output
@@ -267,7 +279,7 @@ export function collectLines(
 cache inputs, delegate:
 
 ```bash
-sed -n '222,229p' src/main.ts
+sed -n '236,243p' src/main.ts
 ```
 
 ```output
@@ -298,7 +310,7 @@ check explicit: only lines that *are* headings can end a section; body
 lines always accumulate into `contentLines`.
 
 ```bash
-sed -n '112,154p' src/sort.ts
+sed -n '184,227p' src/sort.ts
 ```
 
 ```output
@@ -314,6 +326,7 @@ function getSortedHeadings(
 
   while (currentIndex < lines.length) {
     const current = lines[currentIndex];
+    if (!current) break;
     // Only a heading at the same-or-higher level ends this section; body
     // lines (headingLevel undefined) are content, never terminators.
     if (
@@ -352,7 +365,7 @@ flattens depth-first — each heading emits its title, its content lines,
 then its (already sorted) subtrees.
 
 ```bash
-sed -n '156,176p' src/sort.ts
+sed -n '229,249p' src/sort.ts
 ```
 
 ```output
@@ -391,7 +404,7 @@ not in indentation.
 lines, builds a `Map` from line number to cache entry, and delegates.
 
 ```bash
-sed -n '94,107p' src/main.ts
+sed -n '115,128p' src/main.ts
 ```
 
 ```output
@@ -418,7 +431,7 @@ list's slice of the file. It pads the front of the array with
 items, sorts, and flattens.
 
 ```bash
-sed -n '219,248p' src/sort.ts
+sed -n '298,334p' src/sort.ts
 ```
 
 ```output
@@ -434,12 +447,19 @@ export function sortListLines(
 ): Line[] {
   const firstLineNumber = inputLines[0]?.lineNumber;
   if (firstLineNumber == null) return inputLines;
-  const lines = [...new Array(firstLineNumber).fill(undefined), ...inputLines];
+  // `new Array(n)` is typed `any[]`, and spreading it would widen the whole
+  // literal to `any[]` — silently disabling type checking on every `lines`
+  // access below. Type the padding explicitly to keep that from happening.
+  const padding: (Line | undefined)[] = new Array(firstLineNumber).fill(
+    undefined,
+  );
+  const lines: (Line | undefined)[] = [...padding, ...inputLines];
   let index = firstLineNumber;
 
   const children: ListPart[] = [];
   while (index < lines.length) {
     const newChild = getSortedListParts(lines, cacheMap, index, compareFn);
+    if (!newChild) break;
     children.push(newChild);
     index = newChild.lastLine + 1;
   }
@@ -469,7 +489,7 @@ terminated. The fix: lines *inside* the list with no cache entry
 read as `-Infinity`, which no real parent pointer can be greater than.
 
 ```bash
-sed -n '190,217p' src/sort.ts
+sed -n '268,296p' src/sort.ts
 ```
 
 ```output
@@ -493,7 +513,8 @@ sed -n '190,217p' src/sort.ts
   ) {
     index++;
     const newChild = getSortedListParts(lines, cacheMap, index, compareFn);
-    index = newChild.lastLine ?? index;
+    if (!newChild) break;
+    index = newChild.lastLine;
     children.push(newChild);
   }
 
@@ -518,7 +539,7 @@ file — but once frontmatter handling made the no-selection range a
 line below it. Deleting it left one path for every document.
 
 ```bash
-sed -n '231,238p' src/main.ts
+sed -n '245,252p' src/main.ts
 ```
 
 ```output
@@ -540,7 +561,7 @@ re-implement an algorithm in a test; if something isn't importable,
 extract it into `sort.ts` first.
 
 ```bash
-sed -n '1,13p' src/sort.test.ts
+sed -n '1,16p' src/sort.test.ts
 ```
 
 ```output
@@ -554,6 +575,9 @@ import {
   type Line,
   type LinkRef,
   replaceLinksOnLine,
+  resolveListRange,
+  resolveSelectionRange,
+  type SectionRef,
   sortHeadings,
   sortListLines,
 } from "./sort";
@@ -565,7 +589,7 @@ list-sort termination fix — parent `-3` is exactly the shape that used
 to hang:
 
 ```bash
-sed -n '374,384p' src/sort.test.ts
+sed -n '493,503p' src/sort.test.ts
 ```
 
 ```output

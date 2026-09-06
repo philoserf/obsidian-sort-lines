@@ -36,6 +36,25 @@ export interface HeadingRef {
   position: { start: { line: number } };
 }
 
+export interface SectionRef {
+  type: string;
+  position: { start: { line: number }; end: { line: number } };
+}
+
+/** An inclusive line range: both `start` and `end` are sortable lines. */
+export interface Range {
+  start: number;
+  end: number;
+}
+
+interface DocumentBounds {
+  from: number;
+  to: number;
+  frontStart: number;
+  lastLine: number;
+  lastLineEmpty: boolean;
+}
+
 export type Comparator = (x: string, y: string) => number;
 
 // Matches any non-empty checkbox: [x], [X], [-], [?], [/], [!], etc.
@@ -65,6 +84,59 @@ export function replaceLinksOnLine(line: string, links: LinkRef[]): string {
       result.substring(link.position.end.col);
   }
   return result;
+}
+
+/**
+ * A file that ends in a newline has an empty final line. It is a format
+ * artifact, not content — but it is a line, and `""` collates before
+ * everything, so leaving it in the range hoists a blank to the top of
+ * every sort. Drop it, unless it is the only line in the range.
+ */
+function withoutTrailingEmpty(range: Range, bounds: DocumentBounds): Range {
+  const droppable =
+    range.end === bounds.lastLine &&
+    bounds.lastLineEmpty &&
+    range.end > range.start;
+  return droppable ? { start: range.start, end: range.end - 1 } : range;
+}
+
+/**
+ * The range to sort when no list is involved: an explicit multi-line
+ * selection, else the whole document below the frontmatter.
+ *
+ * A selection inside a single line reads as no selection — `from === to`
+ * — and sorts the whole document, which is long-standing behavior.
+ */
+export function resolveSelectionRange(bounds: DocumentBounds): Range {
+  const range =
+    bounds.from !== bounds.to
+      ? { start: bounds.from, end: bounds.to }
+      : { start: bounds.frontStart, end: bounds.lastLine };
+  return withoutTrailingEmpty(range, bounds);
+}
+
+/**
+ * The range to sort for the list command: the list section enclosing the
+ * cursor, if there is one.
+ *
+ * A one-item list is a section whose start and end are the same line. That
+ * is a range, not an absent one — testing `start !== end` here is what made
+ * the command fall through and sort the whole document instead.
+ */
+export function resolveListRange(
+  bounds: DocumentBounds,
+  sections: SectionRef[],
+): Range {
+  const list = sections.find(
+    (s) =>
+      s.type === "list" &&
+      s.position.start.line <= bounds.from &&
+      s.position.end.line >= bounds.to,
+  );
+  if (list) {
+    return { start: list.position.start.line, end: list.position.end.line };
+  }
+  return resolveSelectionRange(bounds);
 }
 
 /**
@@ -121,6 +193,7 @@ function getSortedHeadings(
 
   while (currentIndex < lines.length) {
     const current = lines[currentIndex];
+    if (!current) break;
     // Only a heading at the same-or-higher level ends this section; body
     // lines (headingLevel undefined) are content, never terminators.
     if (
@@ -176,16 +249,21 @@ export function sortHeadings(lines: Line[], compare: Comparator): Line[] {
 }
 
 function getSortedListParts(
-  lines: Line[],
+  lines: (Line | undefined)[],
   cacheMap: Map<number, ListItemCache>,
   index: number,
   compareFn: (a: ListPart, b: ListPart) => number,
-): ListPart {
+): ListPart | undefined {
+  // `lines` is padded to absolute line numbers, so the leading entries are
+  // empty by construction. Both callers seed `index` past the padding, but
+  // that is an invariant of the walk rather than of the type — a line we
+  // cannot read ends it, the same way `parentAt` terminates past the end.
+  const title = lines[index];
+  if (!title) return;
+
   const children: ListPart[] = [];
   const startListCache = cacheMap.get(index);
-  if (!startListCache)
-    return { children: [], title: lines[index], lastLine: index };
-  const title = lines[index];
+  if (!startListCache) return { children: [], title, lastLine: index };
 
   // Obsidian's ListItemCache.parent is the line number of the parent item,
   // or, for top-level items, the negative of the list's first line. Lines
@@ -207,7 +285,8 @@ function getSortedListParts(
   ) {
     index++;
     const newChild = getSortedListParts(lines, cacheMap, index, compareFn);
-    index = newChild.lastLine ?? index;
+    if (!newChild) break;
+    index = newChild.lastLine;
     children.push(newChild);
   }
 
@@ -228,12 +307,19 @@ export function sortListLines(
 ): Line[] {
   const firstLineNumber = inputLines[0]?.lineNumber;
   if (firstLineNumber == null) return inputLines;
-  const lines = [...new Array(firstLineNumber).fill(undefined), ...inputLines];
+  // `new Array(n)` is typed `any[]`, and spreading it would widen the whole
+  // literal to `any[]` — silently disabling type checking on every `lines`
+  // access below. Type the padding explicitly to keep that from happening.
+  const padding: (Line | undefined)[] = new Array(firstLineNumber).fill(
+    undefined,
+  );
+  const lines: (Line | undefined)[] = [...padding, ...inputLines];
   let index = firstLineNumber;
 
   const children: ListPart[] = [];
   while (index < lines.length) {
     const newChild = getSortedListParts(lines, cacheMap, index, compareFn);
+    if (!newChild) break;
     children.push(newChild);
     index = newChild.lastLine + 1;
   }

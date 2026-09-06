@@ -19,8 +19,11 @@ async function build() {
     return;
   }
 
+  const [bundle] = result.outputs;
   console.log(
-    `Built main.js (${(result.outputs[0].size / 1024).toFixed(1)} KB)`,
+    bundle
+      ? `Built main.js (${(bundle.size / 1024).toFixed(1)} KB)`
+      : "Built main.js",
   );
 }
 

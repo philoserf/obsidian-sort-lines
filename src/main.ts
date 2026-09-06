@@ -1,34 +1,55 @@
 import type { CachedMetadata } from "obsidian";
 import { MarkdownView, Notice, Plugin } from "obsidian";
 import {
+  type Comparator,
   collectLines,
   getFrontStart,
   type Line,
   type ListPart,
+  type Range,
+  resolveListRange,
+  resolveSelectionRange,
   sortHeadings,
   sortListLines,
 } from "./sort";
 
-interface EditorContext {
+interface SortTarget {
   view: MarkdownView;
   cache: CachedMetadata;
+}
+
+interface EditorContext extends SortTarget {
   start: number;
   end: number;
   endLineLength: number;
 }
 
+/** Everything the range resolvers need to read off the editor. */
+function bounds({ view, cache }: SortTarget) {
+  const editor = view.editor;
+  const lastLine = editor.lastLine();
+  return {
+    from: editor.getCursor("from").line,
+    to: editor.getCursor("to").line,
+    frontStart: getFrontStart(cache.frontmatter),
+    lastLine,
+    lastLineEmpty: editor.getLine(lastLine) === "",
+  };
+}
+
 export default class SortLinesPlugin extends Plugin {
-  private compare!: (x: string, y: string) => number;
+  // Built at construction, not in onload: a definite-assignment assertion
+  // here would only postpone the failure to whichever method ran first,
+  // reporting it as "this.compare is not a function" with no hint that the
+  // real problem was call order.
+  private readonly compare: Comparator = new Intl.Collator(navigator.language, {
+    usage: "sort",
+    sensitivity: "base",
+    numeric: true,
+    ignorePunctuation: true,
+  }).compare;
 
   override onload() {
-    const { compare } = new Intl.Collator(navigator.language, {
-      usage: "sort",
-      sensitivity: "base",
-      numeric: true,
-      ignorePunctuation: true,
-    });
-    this.compare = compare;
-
     this.addCommand({
       id: "sort-alphabetically",
       name: "Sort alphabetically",
@@ -66,7 +87,7 @@ export default class SortLinesPlugin extends Plugin {
   }
 
   private sortAlphabetically() {
-    const ctx = this.getEditorContext(false);
+    const ctx = this.getSelectionContext();
     if (!ctx) {
       new Notice("Sort Lines: no active editor");
       return;
@@ -81,7 +102,7 @@ export default class SortLinesPlugin extends Plugin {
   }
 
   private sortListRecursively(compareFn: (a: ListPart, b: ListPart) => number) {
-    const ctx = this.getEditorContext(true);
+    const ctx = this.getEnclosingListContext();
     if (!ctx) {
       new Notice("Sort Lines: no active editor");
       return;
@@ -107,7 +128,7 @@ export default class SortLinesPlugin extends Plugin {
   }
 
   private sortHeadings() {
-    const ctx = this.getEditorContext(false);
+    const ctx = this.getSelectionContext();
     if (!ctx) {
       new Notice("Sort Lines: no active editor");
       return;
@@ -121,7 +142,7 @@ export default class SortLinesPlugin extends Plugin {
   }
 
   private sortLengthOfLine() {
-    const ctx = this.getEditorContext(false);
+    const ctx = this.getSelectionContext();
     if (!ctx) {
       new Notice("Sort Lines: no active editor");
       return;
@@ -136,7 +157,7 @@ export default class SortLinesPlugin extends Plugin {
   }
 
   private permuteReverse() {
-    const ctx = this.getEditorContext(false);
+    const ctx = this.getSelectionContext();
     if (!ctx) {
       new Notice("Sort Lines: no active editor");
       return;
@@ -151,7 +172,7 @@ export default class SortLinesPlugin extends Plugin {
   }
 
   private permuteShuffle() {
-    const ctx = this.getEditorContext(false);
+    const ctx = this.getSelectionContext();
     if (!ctx) {
       new Notice("Sort Lines: no active editor");
       return;
@@ -161,61 +182,54 @@ export default class SortLinesPlugin extends Plugin {
       new Notice("Sort Lines: no lines to sort");
       return;
     }
+    // Fisher-Yates. Both reads are in range for the whole loop; the guard
+    // is what lets the compiler see that without an assertion.
     for (let i = lines.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
-      [lines[i], lines[j]] = [lines[j], lines[i]];
+      const from = lines[i];
+      const to = lines[j];
+      if (!from || !to) continue;
+      lines[i] = to;
+      lines[j] = from;
     }
     this.setLines(ctx, lines);
   }
 
-  private getEditorContext(
-    fromCurrentList: boolean,
-  ): EditorContext | undefined {
+  /** The sort range for every command but the list sort. */
+  private getSelectionContext(): EditorContext | undefined {
+    const target = this.resolveTarget();
+    if (!target) return;
+    return this.buildContext(target, resolveSelectionRange(bounds(target)));
+  }
+
+  /** The sort range for the list sort: the list enclosing the cursor. */
+  private getEnclosingListContext(): EditorContext | undefined {
+    const target = this.resolveTarget();
+    if (!target) return;
+    return this.buildContext(
+      target,
+      resolveListRange(bounds(target), target.cache.sections ?? []),
+    );
+  }
+
+  private resolveTarget(): SortTarget | undefined {
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!view?.file) return;
 
     const cache = this.app.metadataCache.getFileCache(view.file);
     if (!cache) return;
 
-    const editor = view.editor;
-    let cursorStart = editor.getCursor("from").line;
-    let cursorEnd = editor.getCursor("to").line;
+    return { view, cache };
+  }
 
-    if (fromCurrentList) {
-      const list = cache.sections?.find(
-        (e) =>
-          e.type === "list" &&
-          e.position.start.line <= cursorStart &&
-          e.position.end.line >= cursorEnd,
-      );
-      if (list) {
-        cursorStart = list.position.start.line;
-        cursorEnd = list.position.end.line;
-      }
-    }
-
-    const cursorEndLineLength = editor.getLine(cursorEnd).length;
-    const frontStart = getFrontStart(cache.frontmatter);
-
-    const frontEnd = editor.lastLine();
-    const frontEndLineLength = editor.getLine(frontEnd).length;
-
-    if (cursorStart !== cursorEnd) {
-      return {
-        view,
-        cache,
-        start: cursorStart,
-        end: cursorEnd,
-        endLineLength: cursorEndLineLength,
-      };
-    }
-
+  private buildContext(target: SortTarget, range: Range): EditorContext {
     return {
-      view,
-      cache,
-      start: frontStart,
-      end: frontEnd,
-      endLineLength: frontEndLineLength,
+      ...target,
+      start: range.start,
+      end: range.end,
+      // Read after the range is final: an earlier read would measure a line
+      // the write no longer ends on.
+      endLineLength: target.view.editor.getLine(range.end).length,
     };
   }
 
