@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.5
+
+### Changed
+
+- Update development dependencies: Biome 2.5.12, `@types/bun` 1.4.1, `@types/node` 26.4.1. No user-facing changes (#77)
+
 ## 2.0.4
 
 ### Fixed
