@@ -25,7 +25,7 @@ The current next step for this repo is tracked in the workspace backlog at `../N
 
 - `build.ts` uses Bun's bundler. Entry `src/main.ts` → `./main.js` (CJS, minified in prod). Externals: `obsidian`, `electron`.
 - `version-bump.ts` syncs `package.json` version → `manifest.json` + `versions.json`.
-- Release: push an annotated tag (e.g., `1.0.0`) to trigger GitHub Actions. Merge PRs before tagging.
+- Releasing: use the `obsidian-release-gate` then `obsidian-release-ship` skills — do not tag by hand.
 
 ### Tests
 
