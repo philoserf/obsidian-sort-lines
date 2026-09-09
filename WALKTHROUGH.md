@@ -1,50 +1,53 @@
 # Obsidian Sort Lines Walkthrough
 
-*2026-06-12T16:25:56Z by Showboat 0.6.1*
-<!-- showboat-id: a25b7013-5638-43ad-b1ca-1f28ef7f8b07 -->
+*2026-09-09T21:45:05Z by Showboat 0.6.1*
+<!-- showboat-id: f1603247-aca2-4918-8443-03eb23db468f -->
 
 ## Overview
 
-Sort Lines is an Obsidian plugin (id `sort-lines`, forked from
-Vinzent03/obsidian-sort-and-permute-lines) that sorts and permutes lines,
-lists, and headings in the active markdown editor. It is written in
-TypeScript, built with Bun's bundler, linted with Biome, and tested with
-`bun test`.
+Sort Lines is an [Obsidian](https://obsidian.md/) plugin (plugin id `sort-lines`) that
+reorders lines, lists, and heading sections in the active markdown editor. It is a fork of
+`Vinzent03/obsidian-sort-and-permute-lines` that has diverged: version 2.0.0 cut the command
+set from eleven to six and changed heading sort to pure alphabetical.
 
-The code splits cleanly in two:
+The stack is TypeScript, bundled by [Bun](https://bun.sh/), linted and formatted by
+[Biome](https://biomejs.dev/), tested with `bun test`.
 
-- `src/sort.ts` — the pure algorithms. `sortHeadings`, `sortListLines`,
-  `replaceLinksOnLine`, `getFrontStart`, and `CHECKBOX_REGEX`, plus the
-  `Line` / `HeadingPart` / `ListPart` / `LinkRef` types. No runtime
-  Obsidian dependency (`ListItemCache` is a type-only import), so tests
-  exercise the real production code directly.
-- `src/main.ts` — a thin orchestrator. `SortLinesPlugin` resolves editor
-  state, hands `Line[]` to a sort function, and writes the result back.
-
-Every command follows the same pipeline:
-`getSelectionContext` / `getEnclosingListContext` → `getLines` → sort/permute → `setLines`.
+The thing to hold in mind for the whole walkthrough: **this plugin does not parse markdown.**
+Every structural fact — where headings are, how list items nest, where links and frontmatter
+begin and end — is read out of Obsidian's `CachedMetadata`. The plugin's own code is a
+sorting engine that consumes pre-digested structure.
 
 ## Architecture
 
-Two source files plus one test file; the build emits `main.js` at the
-repo root for Obsidian to load.
+The whole plugin is two source files plus a test file. The split between them is the single
+most important structural fact in the repository.
 
 ```bash
-ls -1 src
+wc -l src/*.ts build.ts version-bump.ts deploy.ts
 ```
 
 ```output
-main.ts
-sort.test.ts
-sort.ts
+     260 src/main.ts
+     520 src/sort.test.ts
+     337 src/sort.ts
+      45 build.ts
+      19 version-bump.ts
+      10 deploy.ts
+    1191 total
 ```
 
-The module boundary is stated at the top of `sort.ts`: pure functions in,
-pure functions out, with `main.ts` owning all editor and metadata-cache
-interaction.
+`src/sort.ts` holds the algorithms and has **no runtime Obsidian dependency** — its only
+import is a type. That is what lets the test file import the real production functions and
+feed them synthetic data, with no mocking of Obsidian's API.
+
+`src/main.ts` is the orchestrator: it talks to Obsidian, reads editor state, calls into
+`sort.ts`, and writes the result back.
+
+You can see the boundary in the imports of each file.
 
 ```bash
-sed -n '1,11p' src/sort.ts
+sed -n '1,4p' src/sort.ts
 ```
 
 ```output
@@ -52,95 +55,146 @@ sed -n '1,11p' src/sort.ts
 // is a type-only import). main.ts orchestrates editor state around these;
 // tests import them directly.
 import type { ListItemCache } from "obsidian";
+```
 
-export interface Line {
-  source: string;
-  formatted: string;
-  headingLevel: number | undefined;
-  lineNumber: number;
+```bash
+sed -n '1,14p' src/main.ts
+```
+
+```output
+import type { CachedMetadata } from "obsidian";
+import { MarkdownView, Notice, Plugin } from "obsidian";
+import {
+  type Comparator,
+  collectLines,
+  getFrontStart,
+  type Line,
+  type ListPart,
+  type Range,
+  resolveListRange,
+  resolveSelectionRange,
+  sortHeadings,
+  sortListLines,
+} from "./sort";
+```
+
+`sort.ts` imports `ListItemCache` as a **type only**, so nothing from the `obsidian` package
+survives into the emitted JavaScript. `main.ts` imports three real values (`MarkdownView`,
+`Notice`, `Plugin`) and is therefore the only file that cannot run outside Obsidian.
+
+## Entry point and build
+
+Obsidian loads a plugin from `manifest.json`, which names the bundle to execute.
+
+```bash
+cat manifest.json
+```
+
+```output
+{
+  "id": "sort-lines",
+  "name": "Sort Lines",
+  "version": "2.0.5",
+  "minAppVersion": "1.0.0",
+  "description": "Sort and permute lines, lists, and headings",
+  "author": "Mark Ayers (originally by Vinzent)",
+  "authorUrl": "https://github.com/philoserf",
+  "isDesktopOnly": false
 }
 ```
 
-`Line` is the currency of the whole plugin. Each editor line carries two
-strings: `source` (what gets written back, byte-for-byte) and `formatted`
-(what comparisons see — links resolved to display text, checkbox markers
-stripped). `headingLevel` and `lineNumber` come from Obsidian's metadata
-cache and drive the two recursive sorts.
-
-## Plugin entry and command registration
-
-`src/main.ts` default-exports `SortLinesPlugin`. One `Intl.Collator`
-(locale-aware, numeric, punctuation-insensitive) is built as a class
-field and its `compare` reused everywhere; `onload` registers the six
-commands. Building the collator at construction rather than in `onload`
-is deliberate — assigning it in `onload` needed a `!` assertion, which
-only postponed the failure to whichever method ran first.
-
 ```bash
-sed -n '52,87p' src/main.ts
+sed -n '1,30p' build.ts
 ```
 
 ```output
-  override onload() {
-    this.addCommand({
-      id: "sort-alphabetically",
-      name: "Sort alphabetically",
-      callback: () => this.sortAlphabetically(),
-    });
-    this.addCommand({
-      id: "sort-length",
-      name: "Sort by length of line",
-      callback: () => this.sortLengthOfLine(),
-    });
-    this.addCommand({
-      id: "sort-headings",
-      name: "Sort headings",
-      callback: () => this.sortHeadings(),
-    });
-    this.addCommand({
-      id: "permute-reverse",
-      name: "Reverse lines",
-      callback: () => this.permuteReverse(),
-    });
-    this.addCommand({
-      id: "permute-shuffle",
-      name: "Shuffle lines",
-      callback: () => this.permuteShuffle(),
-    });
+import { watch } from "node:fs";
 
-    this.addCommand({
-      id: "sort-list-recursively",
-      name: "Sort current list recursively",
-      callback: () =>
-        this.sortListRecursively((a, b) =>
-          this.compare(a.title.formatted.trim(), b.title.formatted.trim()),
-        ),
-    });
+const isWatch = process.argv.includes("--watch");
+
+async function build() {
+  const result = await Bun.build({
+    entrypoints: ["src/main.ts"],
+    outdir: ".",
+    format: "cjs",
+    external: ["obsidian", "electron"],
+    minify: !isWatch,
+    sourcemap: isWatch ? "linked" : "none",
+  });
+
+  if (!result.success) {
+    console.error("Build failed");
+    for (const message of result.logs) console.error(message);
+    if (!isWatch) process.exit(1);
+    return;
   }
+
+  const [bundle] = result.outputs;
+  console.log(
+    bundle
+      ? `Built main.js (${(bundle.size / 1024).toFixed(1)} KB)`
+      : "Built main.js",
+  );
+}
+
+await build();
 ```
 
-The remaining three are reverse, shuffle, and the recursive list sort.
-The list command is the only one that builds a `ListPart` comparator —
-it compares the `formatted` text of each list item's title line.
+`build.ts` bundles `src/main.ts` into `./main.js` as CommonJS, marking `obsidian` and
+`electron` external — Obsidian provides both at runtime. Production builds are minified;
+`--watch` builds are not and carry a linked sourcemap.
+
+## The plugin class
+
+`main.ts` exports a single default class. Before `onload` runs, one field is initialized.
 
 ```bash
-sed -n '79,86p' src/main.ts
+sed -n '40,51p' src/main.ts
 ```
 
 ```output
-    this.addCommand({
-      id: "sort-list-recursively",
-      name: "Sort current list recursively",
-      callback: () =>
-        this.sortListRecursively((a, b) =>
-          this.compare(a.title.formatted.trim(), b.title.formatted.trim()),
-        ),
-    });
+export default class SortLinesPlugin extends Plugin {
+  // Built at construction, not in onload: a definite-assignment assertion
+  // here would only postpone the failure to whichever method ran first,
+  // reporting it as "this.compare is not a function" with no hint that the
+  // real problem was call order.
+  private readonly compare: Comparator = new Intl.Collator(navigator.language, {
+    usage: "sort",
+    sensitivity: "base",
+    numeric: true,
+    ignorePunctuation: true,
+  }).compare;
+
 ```
 
-Every command body is the same four-step pipeline; `sortAlphabetically`
-is representative. Each guard failure surfaces a `Notice` instead of
-silently doing nothing.
+This is the comparator every alphabetical sort uses. Three details matter:
+
+- `sensitivity: "base"` makes the sort case- and accent-insensitive.
+- `numeric: true` makes `item2` sort before `item10` rather than after it.
+- `ignorePunctuation: true` means leading bullets and markers do not dominate the ordering.
+
+The comment explains why it is a field initializer rather than an assignment in `onload`:
+a definite-assignment assertion would only move the failure later and report it as
+"this.compare is not a function", hiding the real cause.
+
+`onload` registers six commands, each a thin callback.
+
+```bash
+grep -n 'id: "' src/main.ts
+```
+
+```output
+54:      id: "sort-alphabetically",
+59:      id: "sort-length",
+64:      id: "sort-headings",
+69:      id: "permute-reverse",
+74:      id: "permute-shuffle",
+80:      id: "sort-list-recursively",
+```
+
+Five of the six follow one shape. `sortAlphabetically` is the canonical instance, and reading
+it once means you have read `sortLengthOfLine`, `permuteReverse`, and `permuteShuffle` too —
+they differ only in the permutation step in the middle.
 
 ```bash
 sed -n '89,102p' src/main.ts
@@ -163,22 +217,108 @@ sed -n '89,102p' src/main.ts
   }
 ```
 
-## Editor context resolution
+Resolve a context, bail with a notice if there is no editor; collect the lines, bail with a
+different notice if there are none; permute; write back. The sixth command, the list sort,
+breaks this shape and is covered later.
 
-Two helpers decide *what range of lines* a command operates on:
-`getSelectionContext` for every command but the list sort, and
-`getEnclosingListContext` for that one. Both resolve the active
-`MarkdownView` and its `CachedMetadata`, read the editor into a plain
-`bounds` record, and hand off to a pure resolver in `sort.ts`.
+## Step 1: resolving the target
 
-The default resolver picks the user's multi-line selection if there is
-one, otherwise the whole file minus YAML frontmatter.
+`resolveTarget` is where the plugin meets Obsidian. Both lookups can fail, and both failures
+mean the same thing to the caller.
 
 ```bash
-sed -n '110,116p' src/sort.ts
+sed -n '223,242p' src/main.ts
 ```
 
 ```output
+  private resolveTarget(): SortTarget | undefined {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view?.file) return;
+
+    const cache = this.app.metadataCache.getFileCache(view.file);
+    if (!cache) return;
+
+    return { view, cache };
+  }
+
+  private buildContext(target: SortTarget, range: Range): EditorContext {
+    return {
+      ...target,
+      start: range.start,
+      end: range.end,
+      // Read after the range is final: an earlier read would measure a line
+      // the write no longer ends on.
+      endLineLength: target.view.editor.getLine(range.end).length,
+    };
+  }
+```
+
+`buildContext` records `endLineLength` — how many characters the last line of the range holds
+— because the write-back at the end needs an exact end position. The comment flags the
+ordering constraint: it is read *after* the range is final, since reading it earlier would
+measure a line the write no longer ends on.
+
+## Step 2: reading the editor into a plain record
+
+`main.ts` never hands an Obsidian object to `sort.ts`. It flattens what the range logic needs
+into an anonymous record first.
+
+```bash
+sed -n '27,38p' src/main.ts
+```
+
+```output
+/** Everything the range resolvers need to read off the editor. */
+function bounds({ view, cache }: SortTarget) {
+  const editor = view.editor;
+  const lastLine = editor.lastLine();
+  return {
+    from: editor.getCursor("from").line,
+    to: editor.getCursor("to").line,
+    frontStart: getFrontStart(cache.frontmatter),
+    lastLine,
+    lastLineEmpty: editor.getLine(lastLine) === "",
+  };
+}
+```
+
+Five plain numbers and a boolean. This is the seam that makes range resolution unit-testable:
+the tests construct this record by hand and never touch Obsidian.
+
+`getFrontStart` turns Obsidian's frontmatter record into the first sortable line number.
+
+```bash
+sed -n '64,69p' src/sort.ts
+```
+
+```output
+/** First sortable line: the line after the frontmatter block, or 0. */
+export function getFrontStart(
+  frontmatter: { position?: { end?: { line?: number } } } | undefined,
+): number {
+  return (frontmatter?.position?.end?.line ?? -1) + 1;
+}
+```
+
+The `?? -1` followed by `+ 1` is the whole trick: no frontmatter yields `0`, and frontmatter
+ending on line 3 yields `4`.
+
+## Step 3: deciding what to sort
+
+`resolveSelectionRange` answers "which lines?" for every command except the list sort.
+
+```bash
+sed -n '103,116p' src/sort.ts
+```
+
+```output
+/**
+ * The range to sort when no list is involved: an explicit multi-line
+ * selection, else the whole document below the frontmatter.
+ *
+ * A selection inside a single line reads as no selection — `from === to`
+ * — and sorts the whole document, which is long-standing behavior.
+ */
 export function resolveSelectionRange(bounds: DocumentBounds): Range {
   const range =
     bounds.from !== bounds.to
@@ -188,65 +328,41 @@ export function resolveSelectionRange(bounds: DocumentBounds): Range {
 }
 ```
 
-The trailing-empty trim is not cosmetic. A file that ends in a newline
-has an empty final line; `""` collates before everything, so leaving it
-in the range hoisted a blank to the top of every whole-document sort —
-injecting a blank line under the frontmatter and dropping the file's
-trailing newline.
+Two cases. A real multi-line selection (`from !== to`) is used as-is. Anything else —
+including a selection that sits inside one line — is treated as "no selection" and the range
+becomes the whole document below the frontmatter.
 
-The list resolver looks for the section enclosing the cursor, and
-answers `undefined` when there is none.
+Then `withoutTrailingEmpty` runs on the result, and it exists to fix a very visible bug.
 
 ```bash
-sed -n '131,143p' src/sort.ts
+sed -n '89,101p' src/sort.ts
 ```
 
 ```output
-export function resolveListRange(
-  bounds: DocumentBounds,
-  sections: SectionRef[],
-): Range | undefined {
-  const list = sections.find(
-    (s) =>
-      s.type === "list" &&
-      s.position.start.line <= bounds.from &&
-      s.position.end.line >= bounds.to,
-  );
-  if (!list) return;
-  return { start: list.position.start.line, end: list.position.end.line };
+/**
+ * A file that ends in a newline has an empty final line. It is a format
+ * artifact, not content — but it is a line, and `""` collates before
+ * everything, so leaving it in the range hoists a blank to the top of
+ * every sort. Drop it, unless it is the only line in the range.
+ */
+function withoutTrailingEmpty(range: Range, bounds: DocumentBounds): Range {
+  const droppable =
+    range.end === bounds.lastLine &&
+    bounds.lastLineEmpty &&
+    range.end > range.start;
+  return droppable ? { start: range.start, end: range.end - 1 } : range;
 }
 ```
 
-Two things here are load-bearing, and both were bugs.
+Any file saved with a trailing newline has an empty last line. It is a format artifact, but
+it is still a line, and `""` collates before everything — so without this, every sort of a
+whole document would hoist a blank line to the top. The `range.end > range.start` guard keeps
+a one-line range from collapsing to nothing.
 
-The `if (!list) return` is a refusal, not a gap. An earlier version fell
-back to `resolveSelectionRange` — the whole document — so putting the
-cursor in prose and running the list sort ran the list algorithm over
-the entire note, reordering it and absorbing following lines into the
-nearest list item. `sortListRecursively` compounded it by guarding on
-`cache.listItems`, which asks whether the *file* contains a list rather
-than whether the *range* does. "No list here" is an answer.
+## Step 4: building the lines
 
-And a one-item list is a section whose start and end are the same line.
-An earlier version tested `start !== end`, read that as "no list found",
-and fell through the same way.
-
-## Line shaping: links, checkboxes, headings
-
-`collectLines` turns raw editor text into the `Line[]` for a range. For
-each line it gathers that line's links and embeds, rewrites them to
-display text, strips any checkbox marker, then stamps heading levels
-from the cache. Comparisons therefore see "what the reader sees", not
-the markdown syntax.
-
-Two contracts are easy to break. `end` is inclusive, matching
-`EditorContext.end` rather than `Array.slice`. And `lineNumber` stays
-absolute — the pre-slice index — because the list sort pads to
-`inputLines[0].lineNumber` against a cacheMap keyed by absolute line.
-
-The heading loop skips positions outside the current text: Obsidian's
-metadata cache can lag the editor during rapid edits, and a stale line
-number must not abort the command.
+`collectLines` turns the document text plus cache data into the `Line[]` the algorithms
+consume. This is the heart of the read path.
 
 ```bash
 sed -n '159,185p' src/sort.ts
@@ -282,8 +398,55 @@ export function collectLines(
 }
 ```
 
-`main.ts` keeps only the editor coupling — read the buffer, assemble the
-cache inputs, delegate:
+Read it in three movements:
+
+1. **Every line in the document** is mapped to a `Line`, carrying both its `source` (the
+   untouched original) and its `formatted` (links resolved, checkbox marker stripped).
+2. **Heading levels are attached by absolute line number**, before any slicing. A heading
+   position past the end of the current text is skipped rather than thrown on, because
+   Obsidian's cache lags the editor during fast typing.
+3. **Only then is the range applied**, with `opts.end + 1` because `end` is inclusive.
+
+Two things here are load-bearing and easy to "clean up" into bugs. The slice happens *last*,
+so link and heading positions — which are absolute — still line up. And `lineNumber` keeps
+its pre-slice value, which the list sort depends on absolutely.
+
+### Link replacement
+
+The `source`/`formatted` split exists so a wiki-link sorts by what the reader sees, not by
+its syntax. `[[2024-01-15|Tuesday standup]]` should sort under T.
+
+```bash
+sed -n '71,87p' src/sort.ts
+```
+
+```output
+/**
+ * Replace each link on a line with its display text. Splices right to
+ * left so earlier replacements don't shift later link positions.
+ */
+export function replaceLinksOnLine(line: string, links: LinkRef[]): string {
+  const sorted = [...links].sort(
+    (a, b) => b.position.start.col - a.position.start.col,
+  );
+  let result = line;
+  for (const link of sorted) {
+    result =
+      result.substring(0, link.position.start.col) +
+      (link.displayText ?? "") +
+      result.substring(link.position.end.col);
+  }
+  return result;
+}
+```
+
+The sort on the first line is the point of the function. Obsidian gives link positions as
+column offsets into the original line; replacing a link with shorter or longer text shifts
+every column to its right. Splicing **right to left** means each replacement only disturbs
+text that has already been processed. There is a test named "links provided in forward order
+still splice correctly" guarding exactly this.
+
+Note also that `main.ts` feeds both links and embeds through this one path.
 
 ```bash
 sed -n '244,251p' src/main.ts
@@ -300,21 +463,71 @@ sed -n '244,251p' src/main.ts
   }
 ```
 
-## Heading sort recursion
+### Checkbox stripping
 
-`sortHeadings` builds a tree of `HeadingPart`s from the flat line list,
-sorts siblings at each level, and flattens back. A synthetic level-0
-root heading anchors the recursion; `flatten(...).slice(1)` drops it on
-the way out.
+The second normalization is a single regex, applied to every line.
 
-The walk in `getSortedHeadings` is where a nasty bug used to live. A
-section ends only when the walk meets a heading at the same-or-higher
-level. An earlier version coerced the *current* line's level with
-`?? 0`, so body lines (`headingLevel: undefined` → 0) also satisfied
-`<= parent level` and terminated the section — the sort silently
-dropped content lines from the document. The fix makes the terminator
-check explicit: only lines that *are* headings can end a section; body
-lines always accumulate into `contentLines`.
+```bash
+sed -n '60,62p' src/sort.ts
+```
+
+```output
+// Matches any non-empty checkbox: [x], [X], [-], [?], [/], [!], etc.
+// Intentionally broad to support Obsidian's alternative checkbox statuses.
+export const CHECKBOX_REGEX = /^(\s*)- \[[^ ]\]/;
+```
+
+`(\s*)` captures the leading indentation and the replacement `"$1"` puts it back, so nesting
+is preserved while the marker goes away. `[^ ]` requires the bracket to hold a non-space, so
+`- [x]`, `- [-]`, and `- [?]` are all stripped, while `- [ ]` is left alone.
+
+That asymmetry has a visible consequence: a completed task sorts by its text, mixed in with
+ordinary prose, while an open task still sorts under its `- [ ]` prefix and therefore
+clusters with other open tasks. Whether that is the intent or a side effect of the pattern is
+not recorded anywhere.
+
+Note also what this regex is *not*: it is not driven by the metadata cache. Unlike every other
+structural decision in the plugin, checkbox recognition is pure text matching, so it fires on
+any line shaped like a checkbox — including one inside a fenced code block. This is filed as
+a finding below.
+
+## Step 5a: sorting headings
+
+Heading sort builds a tree, sorts siblings at each level, and flattens it back.
+
+```bash
+sed -n '232,252p' src/sort.ts
+```
+
+```output
+/**
+ * Sort headings recursively: siblings sort alphabetically at each level,
+ * content lines stay under their heading.
+ */
+export function sortHeadings(lines: Line[], compare: Comparator): Line[] {
+  const root: Line = {
+    headingLevel: 0,
+    formatted: "",
+    source: "",
+    lineNumber: -1,
+  };
+  const res = getSortedHeadings(lines, 0, root, compare);
+  const flatten = (h: HeadingPart): Line[] => {
+    const list = [h.title, ...h.lines];
+    for (const sub of h.headings) {
+      list.push(...flatten(sub));
+    }
+    return list;
+  };
+  return flatten(res).slice(1);
+}
+```
+
+A synthetic root `Line` at level 0 seeds the recursion so that every real heading (level 1-6)
+is deeper than it and becomes its child. The final `.slice(1)` drops that fake root back out
+of the result.
+
+The recursion itself does the work.
 
 ```bash
 sed -n '187,230p' src/sort.ts
@@ -367,48 +580,100 @@ function getSortedHeadings(
 }
 ```
 
-The public wrapper plants the synthetic root, recurses once, then
-flattens depth-first — each heading emits its title, its content lines,
-then its (already sorted) subtrees.
+The loop walks forward from `from` and classifies each line:
+
+- A heading at the **same or shallower** level ends this section — return.
+- A **deeper** heading is a child: recurse, and jump `currentIndex` to the end of that subtree.
+- Anything else is a **content line** and is appended to `contentLines`.
+
+The comment on the terminator check is worth noting: body lines have `headingLevel === undefined`
+and are explicitly *not* terminators. Only a heading closes a section.
+
+Sorting happens on one line — `headings.sort(...)` — and it sorts only the direct children at
+this level. Because every level does the same on its way back up the recursion, the result is
+a tree sorted at every depth, with each heading's content riding along in `lines`.
+
+## Step 5b: sorting lists
+
+The list sort is the one command that breaks the shape established earlier, and it does so
+three times over: a different range resolver, an extra input guard, and a different tree
+algorithm.
+
+### A different range
+
+Where the other commands accept the selection, the list sort finds the list enclosing the
+cursor — and refuses to do anything if there isn't one.
 
 ```bash
-sed -n '232,252p' src/sort.ts
+sed -n '118,143p' src/sort.ts
 ```
 
 ```output
 /**
- * Sort headings recursively: siblings sort alphabetically at each level,
- * content lines stay under their heading.
+ * The range to sort for the list command: the list section enclosing the
+ * cursor, or `undefined` when the cursor is not in a list.
+ *
+ * A one-item list is a section whose start and end are the same line. That
+ * is a range, not an absent one — testing `start !== end` here is what made
+ * the command fall through and sort the whole document instead.
+ *
+ * There is deliberately no fallback. Falling back to the whole document
+ * meant the list algorithm ran over prose whenever the cursor sat outside
+ * a list, reordering the document and absorbing following lines into the
+ * nearest list item. "No list here" is an answer, not a gap to fill.
  */
-export function sortHeadings(lines: Line[], compare: Comparator): Line[] {
-  const root: Line = {
-    headingLevel: 0,
-    formatted: "",
-    source: "",
-    lineNumber: -1,
-  };
-  const res = getSortedHeadings(lines, 0, root, compare);
-  const flatten = (h: HeadingPart): Line[] => {
-    const list = [h.title, ...h.lines];
-    for (const sub of h.headings) {
-      list.push(...flatten(sub));
-    }
-    return list;
-  };
-  return flatten(res).slice(1);
+export function resolveListRange(
+  bounds: DocumentBounds,
+  sections: SectionRef[],
+): Range | undefined {
+  const list = sections.find(
+    (s) =>
+      s.type === "list" &&
+      s.position.start.line <= bounds.from &&
+      s.position.end.line >= bounds.to,
+  );
+  if (!list) return;
+  return { start: list.position.start.line, end: list.position.end.line };
 }
 ```
 
-## Recursive list sort
+Both comments record scars. Testing `start !== end` here once made a one-item list look like
+"no list", so the command fell through and sorted the entire document. And there is
+deliberately **no fallback**: an earlier version ran the list algorithm over prose whenever
+the cursor sat outside a list, absorbing following lines into the nearest list item. "No list
+here" is treated as an answer, not a gap to fill.
 
-The list sort leans on Obsidian's `ListItemCache`: for every list item
-the cache records `parent` — the *absolute line number* of its parent
-item, or a negative number (the negative of the list's first line) for
-top-level items. Nesting is encoded entirely in these parent pointers,
-not in indentation.
+`main.ts` turns that `undefined` into a distinguishable failure.
 
-`main.ts` does the editor-side prep: it refuses lists containing blank
-lines, builds a `Map` from line number to cache entry, and delegates.
+```bash
+sed -n '205,221p' src/main.ts
+```
+
+```output
+  /**
+   * The sort range for the list sort: the list enclosing the cursor.
+   *
+   * Reports why it failed, because the two reasons need different notices
+   * and neither is "sort the whole document instead".
+   */
+  private getEnclosingListContext():
+    | { ctx: EditorContext }
+    | { error: "no active editor" | "cursor is not inside a list" } {
+    const target = this.resolveTarget();
+    if (!target) return { error: "no active editor" };
+
+    const range = resolveListRange(bounds(target), target.cache.sections ?? []);
+    if (!range) return { error: "cursor is not inside a list" };
+
+    return { ctx: this.buildContext(target, range) };
+  }
+```
+
+A result union rather than `undefined`, because the two failures need different notices.
+
+### An extra guard, and the cache map
+
+The command body then does something no other command does: it validates its input.
 
 ```bash
 sed -n '104,128p' src/main.ts
@@ -442,14 +707,20 @@ sed -n '104,128p' src/main.ts
   }
 ```
 
-`sortListLines` has to reconcile two coordinate systems: the cache's
-parent pointers are absolute line numbers, but the input is only the
-list's slice of the file. It pads the front of the array with
-`undefined` entries so index N really is line N, walks the top-level
-items, sorts, and flattens.
+A blank line anywhere in the range aborts the sort, because the parent-pointer walk assumes
+the list is contiguous.
+
+The last step builds `cacheMap`: Obsidian's `listItems` array, re-keyed by the **absolute
+line number** each item starts on. That key space is why `Line.lineNumber` must stay absolute
+all the way through `collectLines`.
+
+### The parent-pointer walk
+
+`sortListLines` is the entry point. Its first job is to make array indices and absolute line
+numbers agree.
 
 ```bash
-sed -n '301,337p' src/sort.ts
+sed -n '301,329p' src/sort.ts
 ```
 
 ```output
@@ -482,35 +753,36 @@ export function sortListLines(
     index = newChild.lastLine + 1;
   }
   children.sort(compareFn);
-
-  const flatten = (part: ListPart): Line[] =>
-    part.children.reduce<Line[]>(
-      (acc, cur) => acc.concat(flatten(cur)),
-      [part.title],
-    );
-  return children.reduce<Line[]>((acc, cur) => acc.concat(flatten(cur)), []);
-}
 ```
 
-`getSortedListParts` is the parent-pointer walk, and `parentAt` is its
-termination guard — the site of the second recent bug. The child-
-collection loop asks "is the next line nested under me?" by comparing
-parent pointers, and treats any missing cache entry as parent `-1`.
+The padding is the trick: prefix the array with `firstLineNumber` empty slots so that
+`lines[n]` is the line numbered `n`. Now array index and `cacheMap` key are the same thing,
+and the recursion can follow parent pointers by indexing directly.
 
-That was fine for lists starting at line 0, where top-level parents are
-`-1`. But a list starting at line 2 gives its top-level items parent
-`-3`, and once the walk ran past the end of the array, every
-out-of-range lookup also read as `-1` — and `-3 < -1` is true, so
-end-of-list looked like an endless run of children and the loop never
-terminated. The fix: lines *inside* the list with no cache entry
-(continuation lines) still read as `-1`, but lines *past the end* now
-read as `-Infinity`, which no real parent pointer can be greater than.
+Then the recursive builder — the densest code in the repository.
 
 ```bash
-sed -n '271,299p' src/sort.ts
+sed -n '254,299p' src/sort.ts
 ```
 
 ```output
+function getSortedListParts(
+  lines: (Line | undefined)[],
+  cacheMap: Map<number, ListItemCache>,
+  index: number,
+  compareFn: (a: ListPart, b: ListPart) => number,
+): ListPart | undefined {
+  // `lines` is padded to absolute line numbers, so the leading entries are
+  // empty by construction. Both callers seed `index` past the padding, but
+  // that is an invariant of the walk rather than of the type — a line we
+  // cannot read ends it, the same way `parentAt` terminates past the end.
+  const title = lines[index];
+  if (!title) return;
+
+  const children: ListPart[] = [];
+  const startListCache = cacheMap.get(index);
+  if (!startListCache) return { children: [], title, lastLine: index };
+
   // Obsidian's ListItemCache.parent is the line number of the parent item,
   // or, for top-level items, the negative of the list's first line. Lines
   // inside the list with no cache entry (continuation lines) read as -1;
@@ -542,22 +814,53 @@ sed -n '271,299p' src/sort.ts
 }
 ```
 
-## Writing back
+Obsidian describes list nesting by **parentage, not depth**. `ListItemCache.parent` is the
+line number of the item's parent, or a *negative* number for a top-level item. There is no
+depth field, so the walk has to compare parent pointers between adjacent lines.
 
-`setLines` closes the loop: it joins the sorted `source` strings and
-splices them over the range with `replaceRange`. Because only `source`
-is ever written, link syntax and checkbox markers survive sorting
-untouched.
+`parentAt` supplies two sentinels that make the comparison total:
 
-This is unconditional. An earlier version branched here, calling
-`setValue` to rewrite the whole document when `start === end`. That was
-inherited from upstream, where "no selection" really did mean the whole
-file — but once frontmatter handling made the no-selection range a
-*sub*-range, the branch corrupted frontmatter on any note with a single
-line below it. Deleting it left one path for every document.
+- A line inside the list with no cache entry — a continuation line — reads as `-1`.
+- A line past the end reads as `-Infinity`.
+
+The `-Infinity` is not defensive padding; it is load-bearing. A top-level item in a list
+starting at line 2 has `parent === -3`, and `-3 < -1`. Without a sentinel strictly below
+every real parent value, running off the end of the list would look like an endless run of
+children.
+
+The `while` condition then collects children in two cases: the next line's parent is deeper
+than ours, or we are top-level (`parent < 0`) and the next line has any parent at all.
+
+`children.sort(compareFn)` runs at every level of the recursion, which is what makes the sort
+recursive — and it happens after `lastLine` is computed, so reordering children cannot
+disturb where the subtree ends.
+
+Finally `sortListLines` flattens the sorted tree back into a line array.
 
 ```bash
-sed -n '253,260p' src/main.ts
+sed -n '330,337p' src/sort.ts
+```
+
+```output
+
+  const flatten = (part: ListPart): Line[] =>
+    part.children.reduce<Line[]>(
+      (acc, cur) => acc.concat(flatten(cur)),
+      [part.title],
+    );
+  return children.reduce<Line[]>((acc, cur) => acc.concat(flatten(cur)), []);
+}
+```
+
+Each subtree emits its title first, then its sorted children depth-first — so a parent always
+lands immediately above the items that belong to it.
+
+## Step 6: writing back
+
+Every command ends in the same three lines.
+
+```bash
+sed -n '253,259p' src/main.ts
 ```
 
 ```output
@@ -568,77 +871,98 @@ sed -n '253,260p' src/main.ts
       { line: ctx.end, ch: ctx.endLineLength },
     );
   }
-}
 ```
 
-## Testing approach
+`source` is emitted, never `formatted` — the normalized text exists only to be compared. The
+write is a single `replaceRange` over the exact resolved range, using the `endLineLength`
+captured back in `buildContext`.
 
-Because `sort.ts` has no runtime Obsidian dependency, `src/sort.test.ts`
-imports the real production symbols — the repo's rule is to never
-re-implement an algorithm in a test; if something isn't importable,
-extract it into `sort.ts` first.
+There is deliberately only one path here. An earlier version branched to `setValue` when
+`start === end`, which destroyed the frontmatter of any note that had frontmatter plus one
+line below it. `replaceRange` preserves everything outside the range, which is what keeps
+frontmatter intact when the range starts below it.
+
+## The shuffle, briefly
+
+One command does its permutation in place rather than through `Array.sort`.
 
 ```bash
-sed -n '1,16p' src/sort.test.ts
+sed -n '185,195p' src/main.ts
 ```
 
 ```output
-import { describe, expect, test } from "bun:test";
-import type { ListItemCache } from "obsidian";
-import {
-  CHECKBOX_REGEX,
-  collectLines,
-  getFrontStart,
-  type HeadingRef,
-  type Line,
-  type LinkRef,
-  replaceLinksOnLine,
-  resolveListRange,
-  resolveSelectionRange,
-  type SectionRef,
-  sortHeadings,
-  sortListLines,
-} from "./sort";
+    // Fisher-Yates. Both reads are in range for the whole loop; the guard
+    // is what lets the compiler see that without an assertion.
+    for (let i = lines.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const from = lines[i];
+      const to = lines[j];
+      if (!from || !to) continue;
+      lines[i] = to;
+      lines[j] = from;
+    }
+    this.setLines(ctx, lines);
 ```
 
-Both regression bugs are pinned by tests. "content lines stay under
-their heading" guards the heading-sort fix, and this one guards the
-list-sort termination fix — parent `-3` is exactly the shape that used
-to hang:
+A standard Fisher-Yates. The `if (!from || !to) continue` guard never fires — both indices
+are provably in range for the whole loop — and exists so the compiler can see that without a
+non-null assertion.
+
+## Tests
+
+All tests live in one file beside the source and import the real production symbols — no
+algorithm is ever re-implemented in a test.
 
 ```bash
-sed -n '505,515p' src/sort.test.ts
+grep -c '  test(' src/sort.test.ts
 ```
 
 ```output
-  test("handles a list that does not start at line 0", () => {
-    const lines = [
-      makeLine("- z", { lineNumber: 2 }),
-      makeLine("- a", { lineNumber: 3 }),
-    ];
-    const cacheMap = new Map([cacheItem(2, -3), cacheItem(3, -3)]);
-
-    const output = sortListLines(lines, cacheMap, compareParts);
-
-    expect(output.map((l) => l.source)).toEqual(["- a", "- z"]);
-  });
+42
 ```
 
-The suite covers every exported piece (run it with `bun test`;
-counts shown here instead of the timing-laden test output):
-
 ```bash
-echo "describe blocks: $(grep -c '^describe(' src/sort.test.ts)"; echo "tests: $(grep -c '^  test(' src/sort.test.ts)"
+grep -n 'describe(' src/sort.test.ts
 ```
 
 ```output
-describe blocks: 8
-tests: 42
+36:describe("sortHeadings", () => {
+83:describe("replaceLinksOnLine", () => {
+160:describe("CHECKBOX_REGEX", () => {
+174:describe("collectLines", () => {
+290:describe("resolveSelectionRange", () => {
+366:describe("resolveListRange", () => {
+418:describe("getFrontStart", () => {
+440:describe("sortListLines", () => {
 ```
 
-Five `describe` blocks — `sortHeadings`, `replaceLinksOnLine`,
-`CHECKBOX_REGEX`, `getFrontStart`, `sortListLines` — one per exported
-piece. What the tests don't cover is `main.ts` itself: the orchestrator
-is deliberately thin enough that everything worth testing lives behind
-the pure boundary.
+The distribution is informative. `collectLines` and `resolveSelectionRange` carry the most
+cases, which matches where the bugs have historically been: not in the sorting algorithms but
+in deciding *which* lines to hand them. The suite runs with `bun test`.
+
+What is **not** covered is the seam this walkthrough opened with. The tests feed the
+algorithms hand-built `LinkRef`, `HeadingRef`, and `SectionRef` objects; nothing verifies
+that Obsidian's cache still produces data of that shape. If `ListItemCache.parent` changed
+meaning tomorrow, every test would still pass.
+
+## Findings
+
+Two things surfaced while tracing the code end to end.
+
+The previous `WALKTHROUGH.md` was checked before being replaced: restored from `HEAD` and
+re-verified against the current source, all of its captured snippets still matched, and its
+prose claims — the data-flow summary, the "covers every exported piece" statement, and the
+test counts — all held. No stale narrative was found, so none is filed.
+
+## Index
+
+| # | Severity | Issue | Primary location |
+| --- | --- | --- | --- |
+| 1 | medium | `absolute-line-number-contract-is-split-across-three-places` | `src/sort.ts`, `src/main.ts:121` |
+| 2 | low | `sort-list-recursively-takes-a-comparator-no-caller-varies` | `src/main.ts:79-86` |
+
+**Total: 2 issues (0 critical, 0 high, 1 medium, 1 low)**
+
+Findings from the `code-theory` pass on the same source live alongside these in `.issues/`,
+and `THEORY.md` covers why the system is shaped this way rather than how it runs.
 
