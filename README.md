@@ -1,5 +1,13 @@
 # Sort Lines
 
+> **Archived 2026-09-18.** This repository is read-only and unmaintained: no fixes, no releases,
+> no issue triage. Nothing broke and nothing was removed — [2.0.5](https://github.com/philoserf/obsidian-sort-lines/releases/tag/2.0.5)
+> is the last release and it works. It is archived because the one installation it existed for
+> stopped needing it, which is the only reason personal tooling ever needs.
+>
+> The code stays MIT-licensed. Fork it and adapt it; that was always the suggestion below, and
+> it is now the only option.
+
 Sort and permute lines, lists, and headings in [Obsidian](https://obsidian.md/). Originally created by [Vinzent](https://github.com/Vinzent03/obsidian-sort-and-permute-lines).
 
 ## You probably shouldn't install this
